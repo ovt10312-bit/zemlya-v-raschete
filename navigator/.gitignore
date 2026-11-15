@@ -8,3 +8,5 @@ dist/
 .wrangler/
 outputs/
 server/assets.generated.mjs
+
+.data-backups/
