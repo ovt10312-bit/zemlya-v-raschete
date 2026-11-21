@@ -27,7 +27,7 @@ if errorlevel 1 (
 echo Открываем Земля - Навигатор...
 powershell.exe -NoLogo -NoProfile -Command "try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:8787' -UseBasicParsing -TimeoutSec 2; if($r.StatusCode -eq 200 -and $r.Content -match 'Навигатор'){exit 0} } catch {}; exit 1" >nul 2>nul
 if not errorlevel 1 goto open_browser
-start "Земля - сервер (не закрывать во время работы)" /min /D "%APP_DIR%" cmd.exe /d /k ""%NODE_EXE%" server\local.mjs"
+start "Земля - сервер (не закрывать во время работы)" /min /D "%APP_DIR%" cmd.exe /d /k ""%NODE_EXE%" --use-system-ca --use-env-proxy server\local.mjs"
 powershell.exe -NoLogo -NoProfile -Command "$ok=$false; for($i=0;$i -lt 20;$i++){try{$r=Invoke-WebRequest -Uri 'http://127.0.0.1:8787' -UseBasicParsing -TimeoutSec 1; if($r.StatusCode -eq 200 -and $r.Content -match 'Навигатор'){$ok=$true;break}}catch{};Start-Sleep -Milliseconds 500};if($ok){exit 0}else{exit 1}" >nul 2>nul
 if errorlevel 1 (
  echo Программа пока не ответила. Открой свёрнутое окно сервера и пришли скриншот ошибки.

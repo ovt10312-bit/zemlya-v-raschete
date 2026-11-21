@@ -1,7 +1,9 @@
+import {createNspdService} from './nspd.mjs';
 import {createMailService,emailPage,verificationPage} from './mail.mjs';
 import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mkdirSync,existsSync,readFileSync,writeFileSync} from 'node:fs';import path from 'node:path';import {randomBytes,scryptSync,timingSafeEqual,createHash} from 'node:crypto';import {handleAPI,schema} from './service.mjs';
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
+const nspd=createNspdService({db});
 const DB = {
   prepare(sql) {
     return {
@@ -33,6 +35,19 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
  if(url.pathname==='/signout-with-chatgpt'){if(sid)db.prepare('DELETE FROM sessions WHERE id = ?').run(createHash('sha256').update(sid).digest('hex'));res.writeHead(303,{'location':'/','set-cookie':'zn_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict'});res.end();return;}
  if(!session){if(url.pathname.startsWith('/api/')){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Войди в локальный кабинет'}));}else{res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(authPage(!account));}return;}
 
+
+ if(url.pathname.startsWith('/api/nspd/')){
+  if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
+  try{
+   let result;
+   if(url.pathname==='/api/nspd/overview'&&req.method==='GET')result=nspd.overview();
+   else if(url.pathname==='/api/nspd/probe'&&req.method==='POST'){await nspd.probe();result=nspd.overview();}
+   else if(url.pathname==='/api/nspd/layer'&&req.method==='POST'){const input=JSON.parse(body.toString());await nspd.layer(String(input.id));result=nspd.overview();}
+   else {res.writeHead(404);res.end(JSON.stringify({error:'Не найдено'}));return;}
+   res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result));
+  }catch(e){res.writeHead(400,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({error:e.message}));}
+  return;
+ }
  if(url.pathname==='/account/email'&&req.method==='GET'){html(emailPage(mail.status()));return;}
  if(url.pathname.startsWith('/account/email/')&&req.method==='POST'){
    if(!req.headers.origin){res.writeHead(403);res.end('Origin required');return;}

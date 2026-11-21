@@ -3,6 +3,7 @@ setlocal
 chcp 65001 >nul
 title Земля - обновление Навигатора
 set "ZN_APP=%USERPROFILE%\Desktop\navigator"
+if not exist "%ZN_APP%\package.json" if exist "%USERPROFILE%\Desktop\zemlya-v-raschete-navigator-app\navigator\package.json" set "ZN_APP=%USERPROFILE%\Desktop\zemlya-v-raschete-navigator-app\navigator"
 if exist "%~dp0package.json" set "ZN_APP=%~dp0"
 if not exist "%ZN_APP%\package.json" (
  echo Папка программы не найдена. Перемести этот файл в папку navigator.
