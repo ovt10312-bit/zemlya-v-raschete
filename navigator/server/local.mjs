@@ -41,6 +41,11 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
   try{
    let result;
    if(url.pathname==='/api/nspd/overview'&&req.method==='GET')result=nspd.overview();
+   else if((url.pathname==='/api/nspd/formation'||url.pathname==='/api/nspd/formation/export')&&req.method==='GET')result=nspd.formation.result(url.searchParams.get('id')||undefined);
+   else if(url.pathname==='/api/nspd/formation/start'&&req.method==='POST'){const input=JSON.parse(body.toString()||'{}');result=nspd.formation.start(input);}
+   else if(url.pathname==='/api/nspd/formation/check'&&req.method==='POST'){const input=JSON.parse(body.toString()||'{}');result=nspd.formation.check(String(input.proposalId||''));}
+   else if(url.pathname==='/api/nspd/formation/pause'&&req.method==='POST')result=nspd.formation.pause();
+   else if(url.pathname==='/api/nspd/formation/resume'&&req.method==='POST')result=nspd.formation.resume();
    else if(url.pathname==='/api/nspd/zone-cards'&&req.method==='GET')result=nspd.zoneCards.targets(url.searchParams.get('reviewId')||undefined);
    else if(url.pathname==='/api/nspd/zone-cards/fetch'&&req.method==='POST'){const input=JSON.parse(body.toString()||'{}');result=await nspd.zoneCards.fetchCard(input.reviewId?String(input.reviewId):undefined,String(input.key||''));}
    else if(url.pathname==='/api/nspd/review'&&req.method==='GET')result=nspd.reviewer.status();
