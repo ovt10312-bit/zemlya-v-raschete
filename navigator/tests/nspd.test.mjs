@@ -8,3 +8,62 @@ test('limits repeated queries, preserves observations across service restarts an
 test('oversized source response rejected without treating it as data',async()=>{const f=fixture(async()=>new Response('huge',{headers:{'content-length':'4000000'}}));try{const r=await f.nspd.layer('36048');assert.equal(r.status,'too_large');assert.equal(r.count,undefined);}finally{f.db.close();}});
 test('stores original geometry and attributes in snapshot, keeps last successful snapshot on HTTP failure',async()=>{let fail=false;const coordinates=[[[35.95,54.8284],[35.9504,54.8284],[35.9504,54.8288],[35.95,54.8288],[35.95,54.8284]]];const f=fixture(async()=>fail?new Response('denied',{status:403}):Response.json({crs:{properties:{name:'EPSG:4326'}},features:[{id:4,geometry:{type:'Polygon',coordinates},properties:{label:'40:04:000000:4',options:{area:900,cost_value:100000}}}]}));try{await f.nspd.layer('36048');let r=f.nspd.objects('36048');assert.equal(r.objects[0].areaM2,900);assert.equal(r.objects[0].geometry.type,'Polygon');assert.deepEqual(r.objects[0].sourceGeometry.coordinates,coordinates);assert.equal(f.nspd.overview().accessSummary.layerDataReceived,true);assert.equal(f.nspd.overview().accessSummary.searchAvailable,false);assert.equal(r.stale,false);f.tick();fail=true;await f.nspd.layer('36048');r=f.nspd.objects('36048');assert.equal(r.objects.length,1);assert.equal(r.stale,true);const resumed=createNspdService({db:f.db,fetchImpl:async()=>{throw Error('not used')}});assert.equal(resumed.objects('36048').objects[0].attributes.cost_value,100000);}finally{f.db.close();}});
 test('snapshot histories are bounded, empty later response replaces current content honestly',async()=>{let features=[];const f=fixture(async()=>Response.json({features}));try{for(let i=0;i<5;i++){f.tick();await f.nspd.layer('36048');}assert.equal(f.db.prepare('SELECT COUNT(*) n FROM nspd_snapshot_history').get().n,3);assert.equal(f.nspd.objects('36048').objects.length,0);assert.ok(f.nspd.objects('36048').snapshot);await assert.rejects(f.nspd.layer('875882'),/Неизвестный/);}finally{f.db.close();}});
+
+test('discovers settlement polygons in larger envelope and queries only selected boundary interior',async()=>{
+ const {boxGeometry,geometryWithin}=await import('../src/nspd-geometry.mjs');
+ const town=boxGeometry({west:35.92,east:35.96,south:54.80,north:54.82}),other=boxGeometry({west:35.97,east:35.98,south:54.80,north:54.81});
+ const calls=[];
+ const f=fixture(async(url,options)=>{
+  const body=JSON.parse(options.body);calls.push(body);
+  const features=body.categories[0].id===472812?[
+   {id:77,geometry:{...town,crs:{properties:{name:'EPSG:4326'}}},properties:{label:'Полигон 77',options:{brd_nmb:'40:04-test',name:'Тестовый город'}}},
+   {id:78,geometry:{...other,crs:{properties:{name:'EPSG:4326'}}},properties:{label:'Соседний полигон'}}
+  ]:[];
+  return Response.json({features});
+ });
+ try{
+  await f.nspd.findBoundary();const d=f.nspd.overview().boundaryDiscovery;
+  assert.equal(d.choices.length,2);assert.equal(d.choices[0].attributes.brd_nmb,'40:04-test');
+  assert.equal(f.nspd.overview().territory,null);
+  assert.throws(()=>f.nspd.selectTerritory('77','wrong-version'),/изменился/);
+  assert.throws(()=>f.nspd.selectTerritory('unknown',d.version),/полигон/);
+  f.nspd.selectTerritory('77',d.version);
+  const chosen=f.nspd.overview().territory;assert.equal(chosen.usable,true);
+  assert.equal(geometryWithin(chosen.queryGeometry,[town]),true);
+  await f.nspd.layer('36048');
+  assert.equal(geometryWithin(calls[1].geom.features[0].geometry,[town]),true);
+  const snap=f.nspd.objects('36048').snapshot;assert.equal(snap.territoryId,'77');assert.equal(snap.count,0);
+  assert.equal(f.nspd.objects('36048').scopeChanged,false);
+  // Reloading the default boundary checkbox must preserve selected geometry/version.
+  await f.nspd.layer('875831');assert.equal(calls.length,2);
+  const resumed=createNspdService({db:f.db,fetchImpl:async()=>{throw Error('no request')}});
+  assert.equal(resumed.overview().territory.id,'77');assert.equal(resumed.overview().territory.usable,true);
+  f.nspd.selectTerritory('78',d.version);assert.equal(f.nspd.objects('36048').scopeChanged,true);
+ }finally{f.db.close();}
+});
+
+test('failed or replaced boundary cannot silently start a search using old selection',async()=>{
+ const {boxGeometry}=await import('../src/nspd-geometry.mjs');
+ let denied=false;
+ const town=boxGeometry({west:35.92,east:35.96,south:54.80,north:54.82});
+ const f=fixture(async()=>denied?new Response('denied',{status:403}):Response.json({features:[{id:77,geometry:town,crs:{properties:{name:'EPSG:4326'}},properties:{label:'Тестовый полигон'}}]}));
+ try{
+  await f.nspd.findBoundary();let d=f.nspd.overview().boundaryDiscovery;f.nspd.selectTerritory('77',d.version);
+  f.tick();denied=true;await f.nspd.findBoundary();
+  assert.equal(f.nspd.overview().territory.usable,false);
+  assert.equal(f.nspd.objects('875831').objects.length,1);
+  assert.throws(()=>f.nspd.selectTerritory('77',d.version),/неуспешна/);
+  await assert.rejects(f.nspd.layer('36048'),/подтверждения/);
+  f.tick();denied=false;await f.nspd.findBoundary();
+  assert.equal(f.nspd.overview().territory.usable,false);
+  d=f.nspd.overview().boundaryDiscovery;f.nspd.selectTerritory('77',d.version);
+  assert.equal(f.nspd.overview().territory.usable,true);
+ }finally{f.db.close();}
+});
+
+test('empty or inferred boundary remains unselected and never receives a fabricated town label',async()=>{
+ const {boxGeometry}=await import('../src/nspd-geometry.mjs');
+ const f=fixture(async()=>Response.json({features:[{id:77,geometry:boxGeometry({west:35.92,east:35.96,south:54.80,north:54.82}),properties:{label:'40-test'}}]}));
+ try{await f.nspd.findBoundary();const d=f.nspd.overview().boundaryDiscovery;assert.equal(d.choices[0].selectable,false);assert.equal(d.choices[0].name,'40-test');assert.throws(()=>f.nspd.selectTerritory('77',d.version),/системой координат/);assert.equal(f.nspd.overview().territory,null);}finally{f.db.close();}
+ const e=fixture(async()=>Response.json({features:[]}));try{await e.nspd.findBoundary();assert.equal(e.nspd.overview().boundaryDiscovery.choices.length,0);assert.equal(e.nspd.overview().territory,null);}finally{e.db.close();}
+});

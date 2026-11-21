@@ -10,12 +10,14 @@ if not exist "%ZN_APP%\package.json" (
  pause
  exit /b 1
 )
-echo Перед обновлением закрой чёрное окно работающего Навигатора.
+echo Перед обновлением останови Навигатор ярлыком «Остановить Навигатор».
+echo Если он запущен в чёрном окне — закрой это окно.
 echo Данные кабинета будут сохранены; также создадим резервную копию папки .data.
 pause
 powershell.exe -NoLogo -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient;try{$t=$c.ConnectAsync('127.0.0.1',8787);if($t.Wait(1000) -and $c.Connected){exit 1}}catch{}finally{$c.Dispose()};exit 0" >nul 2>nul
 if errorlevel 1 (
- echo Навигатор ещё работает. Закрой окно сервера и запусти обновление снова.
+ echo Навигатор ещё работает. Используй ярлык остановки или закрой окно сервера.
+ echo Затем запусти обновление снова.
  pause
  exit /b 1
 )
@@ -34,14 +36,18 @@ echo Собираем программу...
 call npm.cmd run build
 if errorlevel 1 goto update_error
 echo Обновление завершено. Сейчас откроем Навигатор.
-if exist "%ZN_APP%\Start-Navigator.cmd" (
+if exist "%ZN_APP%\scripts\windows-launcher.vbs" (
+ start "" wscript.exe "%ZN_APP%\scripts\windows-launcher.vbs"
+) else if exist "%ZN_APP%\Start-Navigator-Hidden.vbs" (
+ start "" wscript.exe "%ZN_APP%\Start-Navigator-Hidden.vbs"
+) else if exist "%ZN_APP%\Start-Navigator.cmd" (
  start "" "%ZN_APP%\Start-Navigator.cmd"
 ) else (
  start "Земля - сервер" /min /D "%ZN_APP%" cmd.exe /d /k "node server\local.mjs"
  timeout /t 3 /nobreak >nul
- start "" "http://127.0.0.1:8787/account/email"
+ start "" "http://127.0.0.1:8787"
 )
-echo Для настройки почты открой http://127.0.0.1:8787/account/email
+echo Открой «Источники и доступ» — НСПД — «Найти границы около Кондрово».
 pause
 exit /b 0
 :update_error

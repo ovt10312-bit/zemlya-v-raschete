@@ -7,3 +7,23 @@ test('preserves raw geometry and source attributes, never converts missing area 
 test('containment respects holes and concave boundary rather than merely vertices/bounding box',()=>{const outer=boxGeometry({west:35.949,east:35.952,south:54.827,north:54.830});const hole=boxGeometry({west:35.9499,east:35.9505,south:54.8283,north:54.8289});const boundary={type:'Polygon',coordinates:[outer.coordinates[0],hole.coordinates[0]]};assert.equal(geometryWithin(g,[outer]),true);assert.equal(geometryWithin(g,[boundary]),false);const concave={type:'Polygon',coordinates:[[[35.949,54.827],[35.952,54.827],[35.952,54.830],[35.95025,54.830],[35.95025,54.8285],[35.95015,54.8285],[35.95015,54.830],[35.949,54.830],[35.949,54.827]]]};assert.equal(geometryWithin(g,[concave]),false);assert.equal(geometryOverlaps(g,hole),true);const distant=boxGeometry({west:35.96,east:35.961,south:54.83,north:54.831});assert.equal(geometryOverlaps(g,distant),false);});
 test('empty boundary, incomplete coverage and missing layers do not become clearance',()=>{const object={geometry:g,coordinateStatus:'declared'};let checks=assessObject(object,[],[]);assert.ok(checks.every(c=>c.status==='unknown'));checks=assessObject(object,[{layerId:'875831',categoryId:472812,checkedAt:'2026-11-21',objects:[],scope:PILOT_BOUNDS}],[]);assert.equal(checks[0].status,'unknown');const partial={layerId:'37294',categoryId:38943,checkedAt:'2026-11-21',objects:[],scope:PILOT_BOUNDS,partial:true};assert.equal(assessObject(object,[partial],[]).find(c=>c.key==='schemes').status,'unknown');});
 test('inferred coordinates remain preliminary even inside loaded settlement polygon',()=>{const outer=boxGeometry({west:35.949,east:35.952,south:54.827,north:54.830});const s={layerId:'875831',categoryId:472812,checkedAt:'2026-11-21',objects:[{id:'town',geometry:outer,coordinateStatus:'declared'}],scope:PILOT_BOUNDS};const c=assessObject({geometry:g,coordinateStatus:'inferred'},[s],[]);assert.equal(c[0].status,'preliminary');const current=[{id:'875831',observation:{status:'denied'}}];assert.equal(assessObject({geometry:g,coordinateStatus:'declared'},[s],current)[0].status,'unknown');});
+
+test('interior sample respects a concave settlement, holes and a narrow multipolygon',async()=>{
+ const {interiorSample}=await import('../src/nspd-geometry.mjs');
+ const outer=boxGeometry({west:35.9,east:36,south:54.8,north:54.9});
+ const hole=boxGeometry({west:35.93,east:35.97,south:54.83,north:54.87});
+ const boundary={type:'Polygon',coordinates:[outer.coordinates[0],hole.coordinates[0]]};
+ const sample=interiorSample(boundary);
+ assert.equal(geometryWithin(sample.geometry,[boundary]),true);
+ assert.equal(geometryOverlaps(sample.geometry,hole),false);
+ const narrow=boxGeometry({west:35.95,east:35.95001,south:54.82,north:54.821});
+ const clipped=interiorSample({type:'MultiPolygon',coordinates:[narrow.coordinates]});
+ assert.equal(geometryWithin(clipped.geometry,[narrow]),true);
+ assert.ok(clipped.scope.east-clipped.scope.west<=.000011);
+});
+
+test('constraint clearance uses clipped query geometry, not its bounding rectangle',()=>{
+ const small=boxGeometry({west:35.9500,east:35.9501,south:54.8284,north:54.8285});
+ const s={layerId:'37294',categoryId:38943,checkedAt:'2026-11-21',objects:[],scope:PILOT_BOUNDS,queryGeometry:small};
+ assert.equal(assessObject({geometry:g,coordinateStatus:'declared'},[s],[]).find(c=>c.key==='schemes').status,'unknown');
+});

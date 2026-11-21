@@ -43,6 +43,8 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
    if(url.pathname==='/api/nspd/overview'&&req.method==='GET')result=nspd.overview();
    else if(url.pathname==='/api/nspd/objects'&&req.method==='GET')result=nspd.objects(String(url.searchParams.get('layer')||''));
    else if(url.pathname==='/api/nspd/probe'&&req.method==='POST'){await nspd.probe();result=nspd.overview();}
+   else if(url.pathname==='/api/nspd/boundary'&&req.method==='POST'){await nspd.findBoundary();result=nspd.overview();}
+   else if(url.pathname==='/api/nspd/territory'&&req.method==='POST'){const input=JSON.parse(body.toString());nspd.selectTerritory(String(input.id),String(input.version));result=nspd.overview();}
    else if(url.pathname==='/api/nspd/layer'&&req.method==='POST'){const input=JSON.parse(body.toString());await nspd.layer(String(input.id));result=nspd.overview();}
    else {res.writeHead(404);res.end(JSON.stringify({error:'Не найдено'}));return;}
    res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result));
