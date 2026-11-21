@@ -41,6 +41,12 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
   try{
    let result;
    if(url.pathname==='/api/nspd/overview'&&req.method==='GET')result=nspd.overview();
+   else if(url.pathname==='/api/nspd/review'&&req.method==='GET')result=nspd.reviewer.status();
+   else if((url.pathname==='/api/nspd/review/results'||url.pathname==='/api/nspd/review/export')&&req.method==='GET')result=nspd.reviewer.results(url.searchParams.get('id')||undefined);
+   else if(url.pathname==='/api/nspd/review/start'&&req.method==='POST'){const input=JSON.parse(body.toString()||'{}');result=nspd.reviewer.start(input.scanId?String(input.scanId):undefined);}
+   else if(url.pathname==='/api/nspd/review/pause'&&req.method==='POST')result=nspd.reviewer.pause();
+   else if(url.pathname==='/api/nspd/review/resume'&&req.method==='POST')result=nspd.reviewer.resume();
+   else if(url.pathname==='/api/nspd/review/finish'&&req.method==='POST')result=nspd.reviewer.finish();
    else if(url.pathname==='/api/nspd/scan'&&req.method==='GET')result=nspd.scanner.status();
    else if(url.pathname==='/api/nspd/scan/results'&&req.method==='GET')result=nspd.scanner.results({id:url.searchParams.get('id')||undefined,status:url.searchParams.get('status')||'all',offset:url.searchParams.get('offset'),limit:url.searchParams.get('limit')||100});
    else if(url.pathname==='/api/nspd/scan/export'&&req.method==='GET')result=nspd.scanner.exportResult(url.searchParams.get('id')||undefined);
