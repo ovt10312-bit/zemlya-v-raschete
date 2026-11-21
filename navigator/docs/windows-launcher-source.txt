@@ -1,0 +1,173 @@
+Option Explicit
+Dim sh, fs, appDir, scriptDir, nodePath, installedScript, desktopDir, i, started
+Set sh = CreateObject("WScript.Shell")
+Set fs = CreateObject("Scripting.FileSystemObject")
+scriptDir = fs.GetParentFolderName(WScript.ScriptFullName)
+appDir = FindApp()
+If appDir = "" Then
+  MsgBox "Не найдена папка Навигатора. Помести этот файл в папку navigator и запусти снова.", 48, "Земля Навигатор"
+  WScript.Quit 1
+End If
+If WScript.Arguments.Count > 0 Then
+  If LCase(WScript.Arguments(0)) = "/stop" Then
+    StopNavigator
+    WScript.Quit 0
+  End If
+End If
+If Not fs.FileExists(appDir & "\dist\client\index.html") Then
+  MsgBox "Приложение ещё не собрано. В папке navigator выполни npm run build.", 48, "Земля Навигатор"
+  WScript.Quit 1
+End If
+nodePath = FindNode()
+If nodePath = "" Then
+  MsgBox "Не найден Node.js. Для программы нужен Node.js 24 или новее.", 48, "Земля Навигатор"
+  WScript.Quit 1
+End If
+On Error Resume Next
+If Not fs.FolderExists(appDir & "\scripts") Then fs.CreateFolder appDir & "\scripts"
+installedScript = appDir & "\scripts\windows-launcher.vbs"
+If StrComp(WScript.ScriptFullName, installedScript, 1) <> 0 Then fs.CopyFile WScript.ScriptFullName, installedScript, True
+If Err.Number <> 0 Then
+  Err.Clear
+  installedScript = WScript.ScriptFullName
+End If
+On Error GoTo 0
+CreateShortcuts installedScript
+If Ready() Then
+  sh.Run "http://127.0.0.1:8787", 1, False
+  WScript.Quit 0
+End If
+sh.CurrentDirectory = appDir
+On Error Resume Next
+sh.Run Q(nodePath) & " --use-system-ca --use-env-proxy " & Q(appDir & "\server\local.mjs"), 0, False
+started = (Err.Number = 0)
+Err.Clear
+On Error GoTo 0
+If started Then
+  For i = 1 To 30
+    WScript.Sleep 500
+    If Ready() Then
+      sh.Run "http://127.0.0.1:8787", 1, False
+      WScript.Quit 0
+    End If
+  Next
+End If
+MsgBox "Сервер не ответил. Запусти Start-Navigator.cmd из папки navigator и пришли сообщение об ошибке. Данные не удалены.", 48, "Земля Навигатор"
+WScript.Quit 1
+
+Function Q(value)
+  Q = Chr(34) & value & Chr(34)
+End Function
+
+Function IsApp(folder)
+  IsApp = fs.FileExists(folder & "\package.json") And fs.FileExists(folder & "\server\local.mjs")
+End Function
+
+Function FindApp()
+  Dim candidates, candidate, desk, docs, picker, picked
+  desk = sh.SpecialFolders("Desktop")
+  docs = sh.SpecialFolders("MyDocuments")
+  candidates = Array(scriptDir, fs.GetParentFolderName(scriptDir), desk & "\navigator", desk & "\zemlya-v-raschete-navigator-app\navigator", docs & "\navigator", docs & "\zemlya-v-raschete-navigator-app\navigator")
+  FindApp = ""
+  For Each candidate In candidates
+    If IsApp(candidate) Then
+      FindApp = candidate
+      Exit Function
+    End If
+  Next
+  Set picker = CreateObject("Shell.Application")
+  Set picked = picker.BrowseForFolder(0, "Выбери папку navigator, где лежит package.json", 0)
+  If Not picked Is Nothing Then
+    candidate = picked.Self.Path
+    If IsApp(candidate) Then FindApp = candidate
+  End If
+End Function
+
+Function FindNode()
+  Dim candidates, candidate, pathPart
+  candidates = Array(sh.ExpandEnvironmentStrings("%ProgramFiles%\nodejs\node.exe"), sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\Programs\nodejs\node.exe"))
+  FindNode = ""
+  For Each candidate In candidates
+    If fs.FileExists(candidate) Then
+      FindNode = candidate
+      Exit Function
+    End If
+  Next
+  For Each pathPart In Split(sh.ExpandEnvironmentStrings("%PATH%"), ";")
+    pathPart = Replace(pathPart, Chr(34), "")
+    If Len(pathPart) > 0 Then
+      candidate = fs.BuildPath(pathPart, "node.exe")
+      If fs.FileExists(candidate) Then
+        FindNode = candidate
+        Exit Function
+      End If
+    End If
+  Next
+End Function
+
+Function Ready()
+  Dim http, text
+  Ready = False
+  On Error Resume Next
+  Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+  http.setTimeouts 500, 500, 500, 500
+  http.setProxy 1
+  http.Open "GET", "http://127.0.0.1:8787", False
+  http.Send
+  If Err.Number = 0 Then
+    If http.Status = 200 Then
+      text = http.responseText
+      Ready = InStr(1, text, "Навигатор", 1) > 0
+    End If
+  End If
+  Err.Clear
+  On Error GoTo 0
+End Function
+
+Sub CreateShortcuts(scriptPath)
+  Dim shortcut, launchPath
+  On Error Resume Next
+  desktopDir = sh.SpecialFolders("Desktop")
+  launchPath = sh.ExpandEnvironmentStrings("%WINDIR%\System32\wscript.exe")
+  Set shortcut = sh.CreateShortcut(desktopDir & "\Земля Навигатор.lnk")
+  shortcut.TargetPath = launchPath
+  shortcut.Arguments = Q(scriptPath)
+  shortcut.WorkingDirectory = appDir
+  shortcut.Description = "Открыть Навигатор без чёрного окна"
+  shortcut.IconLocation = sh.ExpandEnvironmentStrings("%WINDIR%\System32\shell32.dll") & ",13"
+  shortcut.Save
+  Set shortcut = sh.CreateShortcut(desktopDir & "\Остановить Навигатор.lnk")
+  shortcut.TargetPath = launchPath
+  shortcut.Arguments = Q(scriptPath) & " /stop"
+  shortcut.WorkingDirectory = appDir
+  shortcut.Description = "Остановить фоновый сервер перед обновлением"
+  shortcut.IconLocation = sh.ExpandEnvironmentStrings("%WINDIR%\System32\shell32.dll") & ",27"
+  shortcut.Save
+  Err.Clear
+  On Error GoTo 0
+End Sub
+
+Sub StopNavigator()
+  Dim answer, service, processes, process, command, count
+  answer = MsgBox("Остановить Навигатор? Сначала заверши загрузку и сохранение документов. Данные кабинета останутся на месте.", 36, "Земля Навигатор")
+  If answer <> 6 Then Exit Sub
+  count = 0
+  On Error Resume Next
+  Set service = GetObject("winmgmts:\\.\root\cimv2")
+  Set processes = service.ExecQuery("SELECT * FROM Win32_Process WHERE Name='node.exe'")
+  For Each process In processes
+    command = process.CommandLine
+    If Not IsNull(command) Then
+      If InStr(1, command, Q(appDir & "\server\local.mjs"), 1) > 0 Then
+        If process.Terminate() = 0 Then count = count + 1
+      End If
+    End If
+  Next
+  Err.Clear
+  On Error GoTo 0
+  If count > 0 Then
+    MsgBox "Навигатор остановлен. Для запуска нажми ярлык «Земля Навигатор».", 64, "Земля Навигатор"
+  Else
+    MsgBox "Фоновый сервер этого ярлыка не найден. Если осталось обычное чёрное окно сервера, закрой его вручную.", 64, "Земля Навигатор"
+  End If
+End Sub
