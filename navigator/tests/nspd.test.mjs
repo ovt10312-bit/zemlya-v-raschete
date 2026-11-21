@@ -67,3 +67,10 @@ test('empty or inferred boundary remains unselected and never receives a fabrica
  try{await f.nspd.findBoundary();const d=f.nspd.overview().boundaryDiscovery;assert.equal(d.choices[0].selectable,false);assert.equal(d.choices[0].name,'40-test');assert.throws(()=>f.nspd.selectTerritory('77',d.version),/системой координат/);assert.equal(f.nspd.overview().territory,null);}finally{f.db.close();}
  const e=fixture(async()=>Response.json({features:[]}));try{await e.nspd.findBoundary();assert.equal(e.nspd.overview().boundaryDiscovery.choices.length,0);assert.equal(e.nspd.overview().territory,null);}finally{e.db.close();}
 });
+
+test('scanner uses the existing fixed NSPD request path and blocks simultaneous layer edits',async()=>{
+ const {boxGeometry,geometryWithin}=await import('../src/nspd-geometry.mjs');
+ const town=boxGeometry({west:35.92,east:35.925,south:54.80,north:54.802});let sourceCall,release;
+ const f=fixture(async(url,options)=>{const body=JSON.parse(options.body);if(body.categories[0].id===472812)return Response.json({features:[{id:77,geometry:{...town,crs:{properties:{name:'EPSG:4326'}}},properties:{label:'Контрольный город'}}]});sourceCall={url,options,body};await new Promise(resolve=>release=resolve);return Response.json({features:[]});});
+ try{await f.nspd.findBoundary();f.nspd.selectTerritory('77',f.nspd.overview().boundaryDiscovery.version);f.nspd.scanner.start();assert.equal(sourceCall.url.origin,'https://nspd.gov.ru');assert.equal(sourceCall.body.categories[0].id,36368);assert.equal(sourceCall.options.credentials,'omit');assert.equal(sourceCall.options.redirect,'error');assert.equal(geometryWithin(sourceCall.body.geom.features[0].geometry,[town]),true);await assert.rejects(f.nspd.layer('36048'),/паузу/);assert.throws(()=>f.nspd.selectTerritory('77','wrong'),/паузу/);f.nspd.scanner.pause();release();for(let i=0;i<100&&f.nspd.scanner.isBusy();i++)await new Promise(r=>setTimeout(r,5));assert.equal(f.nspd.scanner.status().job.status,'paused');assert.equal(f.nspd.scanner.status().job.cellsDone,0);}finally{f.db.close();}
+});

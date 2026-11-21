@@ -41,6 +41,13 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
   try{
    let result;
    if(url.pathname==='/api/nspd/overview'&&req.method==='GET')result=nspd.overview();
+   else if(url.pathname==='/api/nspd/scan'&&req.method==='GET')result=nspd.scanner.status();
+   else if(url.pathname==='/api/nspd/scan/results'&&req.method==='GET')result=nspd.scanner.results({id:url.searchParams.get('id')||undefined,status:url.searchParams.get('status')||'all',offset:url.searchParams.get('offset'),limit:url.searchParams.get('limit')||100});
+   else if(url.pathname==='/api/nspd/scan/export'&&req.method==='GET')result=nspd.scanner.exportResult(url.searchParams.get('id')||undefined);
+   else if(url.pathname==='/api/nspd/scan/start'&&req.method==='POST')result=nspd.scanner.start();
+   else if(url.pathname==='/api/nspd/scan/pause'&&req.method==='POST')result=nspd.scanner.pause();
+   else if(url.pathname==='/api/nspd/scan/resume'&&req.method==='POST')result=nspd.scanner.resume();
+   else if(url.pathname==='/api/nspd/scan/finish'&&req.method==='POST')result=nspd.scanner.finish();
    else if(url.pathname==='/api/nspd/objects'&&req.method==='GET')result=nspd.objects(String(url.searchParams.get('layer')||''));
    else if(url.pathname==='/api/nspd/probe'&&req.method==='POST'){await nspd.probe();result=nspd.overview();}
    else if(url.pathname==='/api/nspd/boundary'&&req.method==='POST'){await nspd.findBoundary();result=nspd.overview();}
