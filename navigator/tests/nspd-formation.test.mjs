@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {formationOptions,prepareFormation,findFormationInCell,formationVerdict} from '../src/nspd-formation-domain.mjs';
+import {formationOptions,prepareFormation,findFormationInCell,formationVerdict,formationTriage} from '../src/nspd-formation-domain.mjs';
 import {boxGeometry,geometryWithin,geometryOverlaps} from '../src/nspd-geometry.mjs';
 import {geometryArea} from '../src/nspd-scan-domain.mjs';
 import {createNspdFormation} from '../server/nspd-formation.mjs';
@@ -64,4 +64,19 @@ test('pausing an in-flight formation check preserves the exact pending category'
 
 test('resume after the final saved fragment completes rather than leaving an empty worker paused',async()=>{
  const f=fixture();try{f.service.start();await waitFor(()=>!f.service.isBusy());const j=f.service.result().job;j.status='paused';f.db.prepare('UPDATE nspd_formation_runs SET payload=? WHERE id=?').run(JSON.stringify(j),j.id);const again=createNspdFormation(f.args);again.resume();await waitFor(()=>!again.isBusy());assert.equal(again.result().job.status,'completed');assert.equal(again.result().job.proposals.length,1);}finally{f.service.pause();await waitFor(()=>!f.service.isBusy());f.db.close()}
+});
+
+
+test('known ZOUIT or infrastructure intersections exclude a formation from the requested shortlist',()=>{
+ for(const key of ['buildings','structures','unfinished','schemes','planning','restrictions','processes']){const p={checks:[{key,name:'Контрольная категория',status:'intersection',incomplete:false}]};const t=formationTriage(p);assert.equal(t.status,'conflict');assert.equal(t.label,'Исключён из подбора');assert.deepEqual(t.reasons,['Контрольная категория']);}
+});
+test('unchecked, partial and unknown categories never become eligible parcels',()=>{
+ assert.equal(formationTriage({}).status,'unverified');assert.equal(formationTriage({checks:[{key:'zoning',status:'intersection'}]}).status,'unverified');
+ const keys=['buildings','structures','unfinished','schemes','planning','restrictions','processes','zoning'];const checks=keys.map(key=>({key,status:key==='zoning'?'intersection':'sample_only',incomplete:key==='restrictions'}));assert.equal(formationTriage({checks}).status,'unverified');
+});
+test('an empty zoning response does not confirm IZS or LPH compatibility',()=>{
+ const keys=['buildings','structures','unfinished','schemes','planning','restrictions','processes','zoning'];const t=formationTriage({checks:keys.map(key=>({key,status:'sample_only',incomplete:false}))});assert.equal(t.status,'unverified');assert.equal(t.label,'Зона не определена');
+});
+test('complete geometric responses with a zoning hit still require the actual zoning regulation',()=>{
+ const keys=['buildings','structures','unfinished','schemes','planning','restrictions','processes','zoning'];const t=formationTriage({checks:keys.map(key=>({key,status:key==='zoning'?'intersection':'sample_only',incomplete:false}))});assert.equal(t.status,'zone_pending');assert.equal(t.label,'Нужен регламент зоны');assert.notEqual(t.status,'approved');
 });

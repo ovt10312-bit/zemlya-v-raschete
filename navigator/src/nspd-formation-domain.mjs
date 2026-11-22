@@ -63,3 +63,13 @@ export function formationVerdict(proposal){
  const conflicts=checks.filter(c=>c.status==='intersection'&&c.key!=='zoning');
  return {geometry:'Вмещается по сохранённым контурам ЕГРН',formation:conflicts.length?'Есть пересечения — требуется разбор':'Возможность образования юридически не подтверждена',withoutAuction:'Основание и процедура предоставления не подтверждены',conflicts:conflicts.map(c=>c.name),pending:['Государственная/муниципальная принадлежность и полномочия органа','Права, обременения и ранее поступившие заявления','Действующий ПЗЗ: ВРИ, минимальная и максимальная площадь, размеры','Земли общего пользования, красные линии и проект межевания','Подъезд без пересечения чужих участков, вода, лес и специальные режимы','Основание и процедура предоставления физлицу для выбранной цели'],isCandidate:false,legalAvailability:'unknown'};
 }
+
+export function formationTriage(proposal){
+ const checks=proposal.checks||[],blocking=['buildings','structures','unfinished','schemes','planning','restrictions','processes'];
+ const conflicts=checks.filter(c=>blocking.includes(c.key)&&c.status==='intersection');
+ if(conflicts.length)return {status:'conflict',label:'Исключён из подбора',tone:'orange',reasons:conflicts.map(c=>c.name||c.key)};
+ const required=[...blocking,'zoning'];
+ if(required.some(key=>!checks.some(c=>c.key===key&&!c.incomplete&&['sample_only','intersection'].includes(c.status))))return {status:'unverified',label:checks.length?'Проверка неполна':'Не проверено',tone:'neutral',reasons:[]};
+ if(!checks.some(c=>c.key==='zoning'&&c.status==='intersection'))return {status:'unverified',label:'Зона не определена',tone:'neutral',reasons:[]};
+ return {status:'zone_pending',label:'Нужен регламент зоны',tone:'neutral',reasons:[]};
+}
