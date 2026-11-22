@@ -1,3 +1,5 @@
+import {createSimpleSearch} from './nspd-simple-search.mjs';
+import {createNspdPlace,WORLD_BOUNDS} from './nspd-place.mjs';
 import {createNspdFormation} from './nspd-formation.mjs';
 import {createNspdZoneCards,captureZoneRecords} from './nspd-zone-cards.mjs';
 import {createNspdReviewer} from './nspd-review.mjs';
@@ -51,7 +53,7 @@ export function createNspdService({db,fetchImpl=globalThis.fetch,timeout=10000,c
   const object=snapshot.objects.find(o=>o.id===id);
   if(!object?.geometry||object.coordinateStatus!=='declared'||!object.hasStableSourceId)throw Error('Для выбора нужен полигон с указанной источником системой координат и постоянным ID.');
   const sample=interiorSample(object.geometry);
-  write('territory',{id:object.id,name:object.attributes.settlement_name||object.attributes.name||object.name,boundaryVersion:snapshot.version,checkedAt:snapshot.checkedAt,geometry:object.geometry,queryGeometry:sample.geometry,scope:sample.scope,selectedAt:stamp()});
+  write('territory',{id:object.id,name:object.attributes.settlement_name||object.attributes.name||object.name,attributes:object.attributes,sourceURL:object.sourceURL,boundaryVersion:snapshot.version,checkedAt:snapshot.checkedAt,geometry:object.geometry,queryGeometry:sample.geometry,scope:sample.scope,selectedAt:stamp()});
   return territory();
  }
  function objects(id){
@@ -89,5 +91,15 @@ export function createNspdService({db,fetchImpl=globalThis.fetch,timeout=10000,c
  reviewer=createNspdReviewer({db,assertSourceIdle:()=>{if(locks.size||scanner.isBusy()||formation?.isBusy())throw Error('Дождись завершения запроса или поставь обход на паузу.');},query:(parcel,category,signal)=>request('/api/geoportal/v1/intersects?typeIntersect=fullObject',{method:'POST',body:{categories:[{id:category.categoryId}],geom:{type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{...parcel.geometry,crs:{type:'name',properties:{name:'EPSG:4326'}}}}]}},layer:NSPD_LAYERS.find(l=>l.id===category.layerId),scope:geometryBounds(parcel.geometry),signal})});
  const zoneCards=createNspdZoneCards({db,clock,query:target=>limited('zone-card:'+target.key,()=>request('/api/geoportal/v2/search/geoportal?'+new URLSearchParams({query:target.registry,thematicSearchId:String(target.themeId)}),{zoneRecords:true}))});
  formation=createNspdFormation({db,clock,assertSourceIdle:()=>{if(locks.size||scanner.isBusy()||reviewer.isBusy())throw Error('Дождись завершения запроса или поставь обход и проверки на паузу.');},query:(proposal,category,signal)=>request('/api/geoportal/v1/intersects?typeIntersect=fullObject',{method:'POST',body:{categories:[{id:category.categoryId}],geom:{type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{...proposal.geometry,crs:{type:'name',properties:{name:'EPSG:4326'}}}}]}},layer:NSPD_LAYERS.find(l=>l.id===category.layerId),scope:geometryBounds(proposal.geometry),signal})});
- return {overview,probe,layer,objects,findBoundary,selectTerritory,scanner,reviewer,zoneCards,formation};
+ const places=createNspdPlace({db,query:(kind,input)=>limited('simple-place:'+kind+':'+(input.query||JSON.stringify(input.geometry)),()=>kind==='search'?request('/api/geoportal/v2/search/geoportal?'+new URLSearchParams({query:input.query,thematicSearchId:String(input.theme)}),{layer:NSPD_LAYERS.find(l=>l.id===(input.theme===1?'36048':'875831')),scope:WORLD_BOUNDS}):request('/api/geoportal/v1/intersects?typeIntersect=fullObject',{method:'POST',body:{categories:[{id:472812}],geom:{type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{...input.geometry,crs:{type:'name',properties:{name:'EPSG:4326'}}}}]}},layer:NSPD_LAYERS.find(l=>l.id==='875831'),scope:geometryBounds(input.geometry)}))});
+ function activatePlace(location){
+  if(locks.size||scanner.isBusy()||reviewer.isBusy()||formation.isBusy())throw Error('Дождись остановки предыдущего поиска.');
+  const version=crypto.randomUUID(),checkedAt=location.checkedAt||stamp(),scope=geometryBounds(location.geometry),sourceURL=location.sourceURL||ORIGIN+'/map';
+  const object={id:location.id,name:location.settlement,attributes:{settlement_name:location.settlement,brd_nmb:location.registry},geometry:location.geometry,coordinateStatus:'declared',hasStableSourceId:true,sourceURL,checkedAt};
+  saveSnapshot({version,layerId:boundaryId,categoryId:472812,checkedAt,scope,queryGeometry:location.geometry,sourceURL,count:1,partial:false,objects:[object]});
+  write('layer:'+boundaryId,{status:'available',checkedAt,url:sourceURL,count:1,message:location.cached?'Используется сохранённая граница.':'Получена граница населённого пункта.'});
+  return selectTerritory(location.id,version);
+ }
+ const simple=createSimpleSearch({db,clock,places,activatePlace,scanner,formation,assertIdle:()=>{if(locks.size||scanner.isBusy()||reviewer.isBusy()||formation.isBusy())throw Error('Предыдущая операция ещё выполняется. Дождись её завершения.');}});
+ return {overview,probe,layer,objects,findBoundary,selectTerritory,scanner,reviewer,zoneCards,formation,places,simple};
 }

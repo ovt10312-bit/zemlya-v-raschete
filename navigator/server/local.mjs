@@ -1,6 +1,6 @@
 import {createNspdService} from './nspd.mjs';
 import {createMailService,emailPage,verificationPage} from './mail.mjs';
-import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mkdirSync,existsSync,readFileSync,writeFileSync} from 'node:fs';import path from 'node:path';import {randomBytes,scryptSync,timingSafeEqual,createHash} from 'node:crypto';import {handleAPI,schema} from './service.mjs';
+import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mkdirSync,existsSync,readFileSync,writeFileSync} from 'node:fs';import path from 'node:path';import {randomBytes,scryptSync,timingSafeEqual,createHash} from 'node:crypto';import {saveFormationParcel,handleAPI,schema} from './service.mjs';
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
 const nspd=createNspdService({db});
@@ -41,6 +41,21 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
   try{
    let result;
    if(url.pathname==='/api/nspd/overview'&&req.method==='GET')result=nspd.overview();
+   else if(url.pathname==='/api/nspd/simple'&&req.method==='GET')result=nspd.simple.result(url.searchParams.get('id')||undefined);
+   else if(url.pathname==='/api/nspd/simple/start'&&req.method==='POST')result=nspd.simple.start(JSON.parse(body.toString()||'{}'));
+   else if(url.pathname==='/api/nspd/simple/choose'&&req.method==='POST')result=nspd.simple.choose(String(JSON.parse(body.toString()||'{}').id||''));
+   else if(url.pathname==='/api/nspd/simple/pause'&&req.method==='POST')result=nspd.simple.pause();
+   else if(url.pathname==='/api/nspd/simple/resume'&&req.method==='POST')result=nspd.simple.resume();
+   else if(['/api/nspd/simple/check-pause','/api/nspd/simple/check-resume'].includes(url.pathname)&&req.method==='POST'){
+    const input=JSON.parse(body.toString()||'{}'),selected=nspd.simple.result(String(input.searchId||''));
+    if(!selected.job?.formationId||selected.job.formationId!==nspd.formation.result().job?.id)throw Error('Эта проверка места сейчас недоступна для продолжения.');
+    if(url.pathname.endsWith('check-pause'))nspd.formation.pause();else nspd.formation.resume();result=nspd.simple.result(selected.job.id);
+   }
+   else if(url.pathname==='/api/nspd/simple/open'&&req.method==='POST'){
+    const input=JSON.parse(body.toString()||'{}'),search=nspd.simple.result(String(input.searchId||'')),job=search.job?.formationId?nspd.formation.result(search.job.formationId).job:null,proposal=job?.proposals.find(p=>p.id===String(input.proposalId||''));
+    result=await saveFormationParcel({DB,BUCKET},{id:'local-owner'},job,proposal);
+    if(input.check===true&&job?.id===nspd.formation.result().job?.id&&!nspd.formation.isBusy()&&!nspd.simple.isBusy()&&(proposal.checks?.length||0)<8){try{nspd.formation.check(proposal.id);}catch(e){result.checkMessage=e.message;}}
+   }
    else if((url.pathname==='/api/nspd/formation'||url.pathname==='/api/nspd/formation/export')&&req.method==='GET')result=nspd.formation.result(url.searchParams.get('id')||undefined);
    else if(url.pathname==='/api/nspd/formation/start'&&req.method==='POST'){const input=JSON.parse(body.toString()||'{}');result=nspd.formation.start(input);}
    else if(url.pathname==='/api/nspd/formation/check'&&req.method==='POST'){const input=JSON.parse(body.toString()||'{}');result=nspd.formation.check(String(input.proposalId||''));}
