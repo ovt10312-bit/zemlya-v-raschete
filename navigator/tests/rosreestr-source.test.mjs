@@ -1,8 +1,8 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
-import {createRosreestrSource,discoverDealFiles,csvPreview,inspectCatalogResponse} from '../server/rosreestr-source.mjs';
+import {createRosreestrSource,discoverDealFiles,csvPreview,inspectCatalogResponse,discoverQuarterFolders,transactionWindow} from '../server/rosreestr-source.mjs';
 const csv='Кадастровый квартал;Площадь;Цена;Количество сделок\r\n40:04:010802;800;600000;1\r\n';
 const html='<a href="/data-sets/dataset_СДЕЛКИ_r-r_01-92_y_2026_q_2.csv">Сделки 2026</a>';
-function fixture(fetchImpl){const db=new DatabaseSync(':memory:');let time=200000;const args={db,fetchImpl,clock:()=>time};return {db,args,source:createRosreestrSource(args),tick(){time+=60001}};}
+function fixture(fetchImpl){const db=new DatabaseSync(':memory:');let time=Date.parse('2026-11-22T06:13:55.016Z');const args={db,fetchImpl,clock:()=>time};return {db,args,source:createRosreestrSource(args),tick(){time+=60001}};}
 
 test('official catalog discovery accepts only fixed-host CSV deal files and picks latest known period',()=>{
  const files=discoverDealFiles(html+'<a href="https://other.example/deals.csv">Сделки</a><a href="http://rosreestr.gov.ru/deals.csv">Сделки</a><a href="/dataset_rent.csv">Аренда</a><a href="/dataset_deals_y_2026_q_3.csv">Сделки III</a>');assert.equal(files.length,2);assert.equal(files[0].period,'2026-Q3');assert.ok(files.every(f=>new URL(f.url).hostname==='rosreestr.gov.ru'));
@@ -41,4 +41,28 @@ test('HTTP200 access challenge is not treated as catalog even if it includes a C
 });
 test('an unresolved HTTP200 report includes bounded page diagnostics and never claims catalog opened',async()=>{
  const f=fixture(async()=>new Response('<title>Данные</title><script src="/catalog.js"></script><div id="root"></div>',{headers:{'content-type':'text/html'}}));try{const r=await f.source.probe();assert.equal(r.lastAttempt.status,'schema_unknown');assert.equal(r.lastAttempt.page.title,'Данные');assert.equal(r.lastAttempt.page.scriptCount,1);assert.doesNotMatch(r.lastAttempt.message,/Каталог открылся/);assert.match(r.lastAttempt.message,/не означает отсутствие/);}finally{f.db.close()}
+});
+
+
+const quarterLink=(q,y,version='')=>{const name=`${q} квартал ${y}г.${version?', версия '+version:''}`;return '<a href="'+encodeURIComponent(name)+'/">'+name+'/</a>'};
+test('rolling year follows all overlapping quarter folders, latest version per quarter, excluding archives and future periods',()=>{
+ const window=transactionWindow(Date.parse('2026-11-22T06:13:55.016Z'));
+ const page='<a href="../">../</a>'+quarterLink(1,2024)+quarterLink(3,2025)+quarterLink(4,2025)+quarterLink(1,2026)+quarterLink(2,2026)+quarterLink(3,2026)+quarterLink(3,2026,'2')+quarterLink(1,2027)+'<a href="https://outside.example/3 квартал 2026г./">3 квартал 2026г.</a><a href="/other/3 квартал 2026г./">3 квартал 2026г.</a>';
+ const folders=discoverQuarterFolders(page,undefined,window);assert.equal(window.from,'2025-11-22T06:13:55.016Z');assert.deepEqual(folders.map(f=>f.period),['2026-Q3','2026-Q2','2026-Q1','2025-Q4']);assert.equal(folders[0].version,2);assert.equal(folders[3].partialPeriod,true);assert.equal(folders[0].partialPeriod,false);
+});
+test('quarterly index is traversed and relative CSV paths stay in their actual directory across four periods',async()=>{
+ const calls=[];const f=fixture(async(url,options)=>{
+  calls.push(String(url));if(options.headers.range)return new Response(csv);
+  if(new URL(url).pathname==='/data-sets/')return new Response(quarterLink(1,2024)+quarterLink(4,2025)+quarterLink(1,2026)+quarterLink(2,2026)+quarterLink(3,2026,'2'));
+  return new Response('<a href="dataset_СДЕЛКИ.csv">Сделки</a><a href="../">../</a>');
+ });try{const r=await f.source.probe();assert.equal(r.lastAttempt.status,'sample_received');assert.equal(r.lastAttempt.folders.length,4);assert.equal(r.lastAttempt.samples.length,4);assert.equal(calls.length,9);assert.equal(r.lastAttempt.samples[0].file.catalogPeriod,'2026-Q3');assert.ok(decodeURIComponent(r.lastAttempt.samples[0].file.url).includes('3 квартал 2026г., версия 2/dataset_СДЕЛКИ.csv'));assert.ok(!calls.some(c=>decodeURIComponent(c).includes('2024')));assert.equal(r.lastAttempt.samples.at(-1).file.partialPeriod,true);assert.equal(r.connected,false);assert.equal(r.lastSample.samples.length,4);}finally{f.db.close()}
+});
+test('quarter folder rate limit stops traversal immediately and persists retry without sampling or requesting older quarters',async()=>{
+ let calls=0;const f=fixture(async()=>++calls===1?new Response(quarterLink(1,2026)+quarterLink(2,2026)):new Response('wait',{status:429,headers:{'retry-after':'60'}}));try{const r=await f.source.probe();assert.equal(calls,2);assert.equal(r.lastAttempt.status,'limited');assert.equal(r.lastAttempt.httpStatus,200);assert.equal(r.lastAttempt.folders[0].httpStatus,429);assert.equal(r.lastSample,null);assert.ok(r.retryAt);await assert.rejects(createRosreestrSource(f.args).probe(),/подождать/);}finally{f.db.close()}
+});
+test('quarterly preview failure retains earlier period samples without reporting the whole year complete',async()=>{
+ let prefixes=0;const f=fixture(async(url,options)=>options.headers.range?(++prefixes===1?new Response(csv):new Response('denied',{status:403})):new URL(url).pathname==='/data-sets/'?new Response(quarterLink(1,2026)+quarterLink(2,2026)):new Response('<a href="dataset_СДЕЛКИ.csv">Сделки</a>'));try{const r=await f.source.probe();assert.equal(r.lastAttempt.status,'denied');assert.equal(r.lastAttempt.samples.length,1);assert.equal(r.lastSample.samples.length,1);assert.equal(r.connected,false);}finally{f.db.close()}
+});
+test('direct root files outside the requested year are excluded; unknown file dates remain explicitly unknown',async()=>{
+ const requested=[];const f=fixture(async(url,options)=>{requested.push(String(url));return options.headers.range?new Response(csv):new Response('<a href="old_deals_y_2024_q_4.csv">Сделки</a><a href="deals.csv">Сделки</a>')});try{const r=await f.source.probe();assert.equal(r.lastAttempt.samples.length,1);assert.equal(r.lastAttempt.sample.file.period,null);assert.equal(r.lastAttempt.sample.file.partialPeriod,null);assert.ok(!requested.some(x=>x.includes('2024')));}finally{f.db.close()}
 });
