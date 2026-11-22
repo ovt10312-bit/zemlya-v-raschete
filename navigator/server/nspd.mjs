@@ -1,3 +1,4 @@
+import {Worker} from 'node:worker_threads';
 import {createSimpleSearch} from './nspd-simple-search.mjs';
 import {createNspdPlace,WORLD_BOUNDS} from './nspd-place.mjs';
 import {createNspdFormation} from './nspd-formation.mjs';
@@ -101,5 +102,8 @@ export function createNspdService({db,fetchImpl=globalThis.fetch,timeout=10000,c
   return selectTerritory(location.id,version);
  }
  const simple=createSimpleSearch({db,clock,places,activatePlace,scanner,formation,assertIdle:()=>{if(locks.size||scanner.isBusy()||reviewer.isBusy()||formation.isBusy())throw Error('Предыдущая операция ещё выполняется. Дождись её завершения.');}});
- return {overview,probe,layer,objects,findBoundary,selectTerritory,scanner,reviewer,zoneCards,formation,places,simple};
+ const referenceCache=new Map();
+ function reference(searchId){const r=simple.result(searchId),f=r.job?.formationId?formation.result(r.job.formationId).job:null;if(!f)return null;const key=JSON.stringify([f.scanId,f.options,r.job.location?.referenceCadastre]);if(referenceCache.has(key))return referenceCache.get(key);const scan=scanner.exportResult(f.scanId);if(scan.job?.status!=='completed')return null;const pending={status:'loading',meanPerSotka:null,sampleCount:0,notice:'Рассчитываем кадастровый ориентир по сохранённым сведениям НСПД.'};referenceCache.set(key,pending);const worker=new Worker(new URL('./cadastral-worker.mjs',import.meta.url),{workerData:{objects:scan.objects,options:{boundary:scan.boundary,settlement:r.job.location.settlement,region:r.job.location.region,usage:f.options.usage,areaMinM2:f.options.minArea*100,areaMaxM2:f.options.maxArea*100,referenceCadastre:r.job.location.referenceCadastre,sourceScanId:f.scanId,maxDetails:10}}});worker.once('message',m=>referenceCache.set(key,m.value||{status:'unavailable',meanPerSotka:null,sampleCount:0,notice:m.error}));worker.once('error',e=>referenceCache.set(key,{status:'unavailable',meanPerSotka:null,sampleCount:0,notice:e.message}));worker.unref();return pending;}
+ const simpleResult=id=>{const r=simple.result(id),value=reference(id);return {...r,cadastralReference:value,formation:r.formation?{...r.formation,cadastralReference:value}:null};};
+ return {overview,probe,layer,objects,findBoundary,selectTerritory,scanner,reviewer,zoneCards,formation,places,cadastralReference:reference,simple:{...simple,result:simpleResult}};
 }

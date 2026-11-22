@@ -1,3 +1,4 @@
+import {createMarketService} from './market-service.mjs';
 import {createRosreestrSource} from './rosreestr-source.mjs';
 import {createNspdService} from './nspd.mjs';
 import {createMailService,emailPage,verificationPage} from './mail.mjs';
@@ -5,7 +6,7 @@ import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mk
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
 const nspd=createNspdService({db});
-const rosreestr=createRosreestrSource({db});
+const rosreestr=createRosreestrSource({db});const market=createMarketService({db});
 const DB = {
   prepare(sql) {
     return {
@@ -38,6 +39,9 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
  if(!session){if(url.pathname.startsWith('/api/')){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Войди в локальный кабинет'}));}else{res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(authPage(!account));}return;}
 
 
+ if(url.pathname==='/api/market'){
+  try{if(req.method!=='GET'&&req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`)throw Error('Недопустимый источник запроса');const input=req.method==='POST'?JSON.parse(body.toString()||'{}'):{parcelId:url.searchParams.get('parcelId')};const state=JSON.parse(db.prepare('SELECT payload FROM workspaces WHERE owner=?').get('local-owner')?.payload||'{"parcels":[]}');const parcel=state.parcels.find(p=>p.id===input.parcelId&&!p.demo);if(!parcel)throw Error('Сохранённый участок не найден');if(!['GET','POST'].includes(req.method))throw Error('Метод не поддерживается');const result=req.method==='GET'?market.status(parcel.id):await market.search(parcel,{avito:input.avito,cian:input.cian});res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}return;
+ }
  if(url.pathname==='/api/rosreestr/source'){
   if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
   try{let result=null;if(req.method==='GET')result=rosreestr.status();else if(req.method==='POST'){const action=JSON.parse(body.toString()||'{}').action??'probe';if(action!=='probe'&&action!=='reparse')throw Error('Неизвестное действие источника.');result=action==='reparse'?await rosreestr.reparse():await rosreestr.probe();}res.writeHead(result?200:405,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result||{error:'Метод не поддерживается'}));}
@@ -60,7 +64,7 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
    }
    else if(url.pathname==='/api/nspd/simple/open'&&req.method==='POST'){
     const input=JSON.parse(body.toString()||'{}'),search=nspd.simple.result(String(input.searchId||'')),job=search.job?.formationId?nspd.formation.result(search.job.formationId).job:null,proposal=job?.proposals.find(p=>p.id===String(input.proposalId||''));
-    result=await saveFormationParcel({DB,BUCKET},{id:'local-owner'},job,proposal);
+    result=await saveFormationParcel({DB,BUCKET},{id:'local-owner'},{...job,cadastralReference:nspd.cadastralReference(search.job.id)},proposal);
     if(input.check===true&&job?.id===nspd.formation.result().job?.id&&!nspd.formation.isBusy()&&!nspd.simple.isBusy()&&(proposal.checks?.length||0)<8){try{nspd.formation.check(proposal.id);}catch(e){result.checkMessage=e.message;}}
    }
    else if((url.pathname==='/api/nspd/formation'||url.pathname==='/api/nspd/formation/export')&&req.method==='GET')result=nspd.formation.result(url.searchParams.get('id')||undefined);
