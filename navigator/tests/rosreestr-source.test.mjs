@@ -1,3 +1,4 @@
+import {deflateRawSync} from 'node:zlib';
 import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
 import {createRosreestrSource,discoverDealFiles,csvPreview,inspectCatalogResponse,discoverQuarterFolders,transactionWindow} from '../server/rosreestr-source.mjs';
 const csv='Кадастровый квартал;Площадь;Цена;Количество сделок\r\n40:04:010802;800;600000;1\r\n';
@@ -86,4 +87,15 @@ test('legacy HTML bodies are decoded from declared charset or invalid UTF8, leav
  const content=`<title>Каталог Росреестра</title><a href="${legacyFolder}">Квартал</a>`;
  const bytes=Uint8Array.from(content,c=>{const i=alphabet.indexOf(c);assert.ok(i>=0);return i});
  for(const type of ['text/html; charset=windows-1251','text/html']){const f=fixture(async(url,options)=>options.headers.range?new Response(csv):new URL(url).pathname==='/data-sets/'?new Response(bytes,{headers:{'content-type':type}}):new Response(`<a href="${legacyFile}">Сделки</a>`));try{const r=await f.source.probe();assert.equal(r.lastAttempt.page.title,'Каталог Росреестра');assert.equal(r.lastAttempt.status,'sample_received');}finally{f.db.close()}}
+});
+
+
+test('published CSV.zip deal links are discovered with the updated schema version, excluding rent and cadastral cost archives',()=>{
+ const base='https://rosreestr.gov.ru/data-sets/'+legacyFolder;
+ const page='<a href="dataset_%D1%C4%C5%CB%CA%C8_r-r_01-92_y_2026_q_3_v2.csv.zip">Сделки</a><a href="dataset_%C0%D0%C5%CD%C4%C0_r-r_01-92_y_2026_q_3_v2.csv.zip">Аренда</a><a href="dataset_%CA%C0%C4%C0%D1%D2%D0%D1%D2%CE%C8%CC%CE%D1%D2%DC_r-r_40-59_y_2026_q_3.csv.zip">Кадастровая стоимость</a>';
+ const files=discoverDealFiles(page,base);assert.equal(files.length,1);assert.equal(files[0].format,'zip');assert.equal(files[0].version,2);assert.equal(files[0].period,'2026-Q3');assert.equal(files[0].url,base+'dataset_%D1%C4%C5%CB%CA%C8_r-r_01-92_y_2026_q_3_v2.csv.zip');
+});
+test('official zip prefix is bounded, decompressed for schema preview and kept outside calculator imports',async()=>{
+ const name=Buffer.from('dataset_СДЕЛКИ.csv'),compressed=deflateRawSync(Buffer.from(csv)),header=Buffer.alloc(30);header.writeUInt32LE(0x04034b50,0);header.writeUInt16LE(0x808,6);header.writeUInt16LE(8,8);header.writeUInt16LE(name.length,26);const zip=Buffer.concat([header,name,compressed]);
+ const calls=[];const f=fixture(async(url,options)=>{calls.push({url:String(url),options});return options.headers.range?new Response(zip,{status:206,headers:{'content-type':'application/zip'}}):new Response('<a href="dataset_СДЕЛКИ_y_2026_q_3_v2.csv.zip">Сделки</a>')});try{const r=await f.source.probe();assert.equal(r.lastAttempt.status,'sample_received');assert.equal(r.lastAttempt.sample.archive.prefixOnly,true);assert.equal(r.lastAttempt.sample.archive.integrity,'not_verified_full_archive');assert.deepEqual(r.lastAttempt.sample.rows[0],['40:04:010802','800','600000','1']);assert.equal(r.lastAttempt.sample.calculationImport,false);assert.equal(r.connected,false);assert.equal(calls[1].options.headers.range,'bytes=0-65535');}finally{f.db.close()}
 });

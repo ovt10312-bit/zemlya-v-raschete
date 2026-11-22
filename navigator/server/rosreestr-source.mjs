@@ -1,3 +1,4 @@
+import {zipCSVPrefix} from './rosreestr-zip.mjs';
 const CATALOG='https://rosreestr.gov.ru/data-sets/';
 const HOSTS=new Set(['rosreestr.gov.ru','www.rosreestr.gov.ru']);
 export const ROSREESTR_CATALOG=CATALOG;
@@ -17,7 +18,7 @@ function catalogLinks(html){
  for(const m of markup.matchAll(/\bdata-(?:href|url|download)\s*=\s*["']([^"']+)["']/gi))links.push({value:entities(m[1]),title:''});
  // Read only declarative JSON. Never execute page scripts or fetch JS endpoints.
  for(const m of document.matchAll(/<script\b[^>]*\btype\s*=\s*["']application\/(?:ld\+)?json["'][^>]*>([\s\S]*?)<\/script\s*>/gi)){
-  try{let visited=0;function visit(v,depth=0){if(++visited>30000||depth>20)return;if(typeof v==='string'){if(/\.csv(?:[?#]|$)/i.test(v))links.push({value:v,title:''})}else if(v&&typeof v==='object')for(const x of Object.values(v))visit(x,depth+1)}visit(JSON.parse(m[1]));}catch{/* Unknown JSON is not interpreted as code. */}
+  try{let visited=0;function visit(v,depth=0){if(++visited>30000||depth>20)return;if(typeof v==='string'){if(/\.csv(?:\.zip)?(?:[?#]|$)/i.test(v))links.push({value:v,title:''})}else if(v&&typeof v==='object')for(const x of Object.values(v))visit(x,depth+1)}visit(JSON.parse(m[1]));}catch{/* Unknown JSON is not interpreted as code. */}
  }
  return links;
 }
@@ -25,11 +26,11 @@ export function discoverDealFiles(html,base=CATALOG){
  const files=[],seen=new Set();
  for(const link of catalogLinks(html)){
   try{const url=officialURL(link.value,base);const decoded=decodePathName(url.pathname);const title=link.title,name=decoded.split('/').at(-1);
-   if(!/\.csv$/i.test(name)||!/(сделк|sdelk|deal)/i.test(name+' '+title)||seen.has(url.href))continue;
-   seen.add(url.href);const period=name.match(/(?:^|_)y_(20\d{2})_q_([1-4])(?:\D|$)/i);files.push({id:url.href,url:url.href,name,title,period:period?`${period[1]}-Q${period[2]}`:null});
+   if(!/\.csv(?:\.zip)?$/i.test(name)||!/(сделк|sdelk|deal)/i.test(name+' '+title)||seen.has(url.href))continue;
+   seen.add(url.href);const period=name.match(/(?:^|_)y_(20\d{2})_q_([1-4])(?:\D|$)/i);files.push({id:url.href,url:url.href,name,title,format:/\.zip$/i.test(name)?'zip':'csv',version:Number(name.match(/_v(\d+)\.csv/i)?.[1]||1),period:period?`${period[1]}-Q${period[2]}`:null});
   }catch{/* External links, scripts and unrelated datasets are never fetched. */}
  }
- return files.sort((a,b)=>(b.period||'').localeCompare(a.period||'')||a.name.localeCompare(b.name)).slice(0,40);
+ return files.sort((a,b)=>(b.period||'').localeCompare(a.period||'')||b.version-a.version||a.name.localeCompare(b.name)).slice(0,40);
 }
 export function transactionWindow(now){
  const end=new Date(now),start=new Date(now);start.setUTCFullYear(start.getUTCFullYear()-1);
@@ -87,7 +88,7 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
  async function fetchOfficial(url,{prefix=false}={}){
   let target=officialURL(url);const signal=AbortSignal.timeout(timeout);
   for(let hop=0;hop<4;hop++){
-   const response=await fetchImpl(target,{headers:{accept:prefix?'text/csv,application/octet-stream;q=0.8':'text/html',...(prefix?{range:'bytes=0-65535'}:{})},credentials:'omit',redirect:'manual',signal});
+   const response=await fetchImpl(target,{headers:{accept:prefix?'application/zip,text/csv,application/octet-stream;q=0.8':'text/html',...(prefix?{range:'bytes=0-65535'}:{})},credentials:'omit',redirect:'manual',signal});
    if([301,302,303,307,308].includes(response.status)){const location=response.headers.get('location');await response.body?.cancel();if(!location)throw Error('Источник перенаправил запрос без адреса.');target=officialURL(location,target);continue;}
    const base={url:target.href,httpStatus:response.status};
    if(!response.ok){await response.body?.cancel();return {...base,status:response.status===403?'denied':response.status===429?'limited':'unavailable',retryAfter:response.headers.get('retry-after'),message:`Росреестр вернул HTTP ${response.status}. Данные о сделках не получены.`};}
@@ -121,15 +122,15 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
       const before=attempt.files.length;addFiles(content,result.url,folder);record.fileCount=attempt.files.length-before;
      }
      if(attempt.status==='available'){
-      attempt.files.sort((a,b)=>(b.period||b.catalogPeriod||'').localeCompare(a.period||a.catalogPeriod||'')||a.name.localeCompare(b.name));
-      if(!attempt.files.length){attempt.status='schema_unknown';attempt.message=page.javascriptRequired?'Для страницы требуется JavaScript. Ссылки на файлы в полученном ответе отсутствуют; сделки не загружены.':folders.length?'Папки за последние 12 месяцев открыты, но CSV сделок внутри не распознаны. Это не означает отсутствие сделок.':'Сервер ответил, но ссылки на CSV сделок за последние 12 месяцев не найдены. Доступ к каталогу и формат ответа пока не подтверждены; это не означает отсутствие сделок.';}
+      attempt.files.sort((a,b)=>(b.period||b.catalogPeriod||'').localeCompare(a.period||a.catalogPeriod||'')||b.version-a.version||a.name.localeCompare(b.name));
+      if(!attempt.files.length){attempt.status='schema_unknown';attempt.message=page.javascriptRequired?'Для страницы требуется JavaScript. Ссылки на файлы в полученном ответе отсутствуют; сделки не загружены.':folders.length?'Папки за последние 12 месяцев открыты, но файлы CSV/ZIP сделок внутри не распознаны. Это не означает отсутствие сделок.':'Сервер ответил, но ссылки на CSV сделок за последние 12 месяцев не найдены. Доступ к каталогу и формат ответа пока не подтверждены; это не означает отсутствие сделок.';}
       else {
        // At most one bounded preview per published quarter; no full-country download.
        const seen=new Set(),selected=attempt.files.filter(f=>{const key=f.period||f.catalogPeriod||'unknown';if(seen.has(key))return false;seen.add(key);return true}).slice(0,5);
        for(const file of selected){
         const sample=await fetchOfficial(file.url,{prefix:true});attempt.sampleHTTP=sample.httpStatus;
         if(sample.status!=='available'){attempt.status=sample.status;attempt.message=sample.message;attempt.retryAfter=sample.retryAfter;break;}
-        const preview={file,...csvPreview(sample.bytes)};attempt.samples.push(preview);attempt.sample??=preview;
+        const unpacked=file.format==='zip'?await zipCSVPrefix(sample.bytes):{bytes:sample.bytes};const preview={file,...csvPreview(unpacked.bytes),...(unpacked.archive?{archive:unpacked.archive}:{})};attempt.samples.push(preview);attempt.sample??=preview;
        }
        if(attempt.status==='available'){attempt.status='sample_received';attempt.message=`За последние 12 месяцев найдены файлы сделок. Получено образцов: ${attempt.samples.length}. Это образцы опубликованных кварталов, а не полная выгрузка сделок за год; цены ещё не добавлены в расчёт.`;}
       }
