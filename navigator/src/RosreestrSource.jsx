@@ -1,3 +1,4 @@
+import RosreestrSelection from './RosreestrSelection.jsx';
 import React,{useEffect,useState,useRef} from 'react';
 import {Database,Download,Loader2} from 'lucide-react';
 import {download} from './NspdObjects.jsx';
@@ -5,13 +6,13 @@ async function call(method='GET',action='probe'){
  const r=await fetch('/api/rosreestr/source',{method,...(method==='POST'?{headers:{'content-type':'application/json'},body:JSON.stringify({action})}:{})});
  const d=await r.json();if(!r.ok)throw Error(d.error||'Не удалось проверить источник');return d;
 }
-export default function RosreestrSource(){
+export default function RosreestrSource({context}){
  const [data,setData]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');const requestActive=useRef(false);
  useEffect(()=>{let stopped=false;call().then(d=>{if(!stopped&&!requestActive.current)setData(d)}).catch(e=>{if(!stopped)setError(e.message)});return()=>{stopped=true}},[]);
  useEffect(()=>{if(!busy)return;let active=true;const timer=setInterval(()=>{call().then(d=>{if(active&&requestActive.current&&d.busy)setData(d)}).catch(()=>{})},1500);return()=>{active=false;clearInterval(timer)}},[busy]);
  async function check(action){requestActive.current=true;setBusy(true);setError('');try{setData(await call('POST',action))}catch(e){setError(e.message)}finally{requestActive.current=false;setBusy(false)}}
  const attempt=data?.lastAttempt,hasCache=data?.cacheCount>0;
- return <section className="panel rosreestr-source">
+ return <><RosreestrSelection context={context}/><details className="panel"><summary>Диагностика источника и сохранённые образцы</summary><section className="rosreestr-source">
   <h3><Database size={18}/> Источник сделок: Росреестр</h3>
   <p>Опубликованные кварталы за последние 12 месяцев. Небольшие исходные фрагменты сохраняются на этом компьютере, даже если формат таблицы пока не распознан. После проверки формата подключим цены к калькулятору.</p>
   <div className="settings-actions">
@@ -30,5 +31,5 @@ export default function RosreestrSource(){
    {attempt.sample&&<details><summary>Подробности таблиц</summary><p>Это образцы для проверки формата, а не подтверждённые сделки населённого пункта. ZIP прочитан частично; целостность полного архива пока не проверялась.</p>{attempt.samples?.map(s=><p key={s.file.url}>{s.file.period||s.file.catalogPeriod||'Период файла не определён'}: {s.file.name}; полей: {s.headers.length}; строк образца: {s.rows.length}. {s.dataset&&'Официальные столбцы распознаны. Это квартальные группы, а не подтверждённые отдельные сделки.'}</p>)}</details>}
    <div className="settings-actions"><button className="btn secondary" onClick={()=>download(data,'rosreestr-source-report.json')}><Download size={16}/>Скачать отчёт источника</button><a className="text-link" href={data.catalogURL} target="_blank" rel="noreferrer">Официальный каталог Росреестра ↗</a></div>
   </>}
- </section>;
+ </section></details></>;
 }

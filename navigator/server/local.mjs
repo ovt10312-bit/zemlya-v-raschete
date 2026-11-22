@@ -1,3 +1,4 @@
+import {createRosreestrSelection} from './rosreestr-selection.mjs';
 import {createMarketService} from './market-service.mjs';
 import {createRosreestrSource} from './rosreestr-source.mjs';
 import {createNspdService} from './nspd.mjs';
@@ -6,7 +7,7 @@ import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mk
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
 const nspd=createNspdService({db});
-const rosreestr=createRosreestrSource({db});const market=createMarketService({db});
+const rosreestr=createRosreestrSource({db});const dealSelection=createRosreestrSelection({db,source:rosreestr,root});const market=createMarketService({db});
 const DB = {
   prepare(sql) {
     return {
@@ -41,6 +42,10 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
 
  if(url.pathname==='/api/market'){
   try{if(req.method!=='GET'&&req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`)throw Error('Недопустимый источник запроса');const input=req.method==='POST'?JSON.parse(body.toString()||'{}'):{parcelId:url.searchParams.get('parcelId')};const state=JSON.parse(db.prepare('SELECT payload FROM workspaces WHERE owner=?').get('local-owner')?.payload||'{"parcels":[]}');const parcel=state.parcels.find(p=>p.id===input.parcelId&&!p.demo);if(!parcel)throw Error('Сохранённый участок не найден');if(!['GET','POST'].includes(req.method))throw Error('Метод не поддерживается');const result=req.method==='GET'?market.status(parcel.id):await market.search(parcel,{avito:input.avito,cian:input.cian});res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}return;
+ }
+ if(url.pathname.startsWith('/api/rosreestr/selection')){
+  if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
+  try{let result;if(req.method==='GET'&&url.pathname==='/api/rosreestr/selection')result=dealSelection.status(url.searchParams.get('id')||undefined);else if(req.method==='POST'){const input=JSON.parse(body.toString()||'{}');if(url.pathname.endsWith('/start'))result=dealSelection.start(input);else if(url.pathname.endsWith('/pause'))result=dealSelection.pause();else if(url.pathname.endsWith('/resume'))result=dealSelection.resume();}if(!result)throw Error('Метод не поддерживается');res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:e.message}));}return;
  }
  if(url.pathname==='/api/rosreestr/source'){
   if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
