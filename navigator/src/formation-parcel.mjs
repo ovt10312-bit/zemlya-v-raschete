@@ -1,5 +1,5 @@
 import {REGIONS} from './domain.mjs';
-export const BUILD_LABEL='22.11.2026 · источник сделок Росреестра';
+export const BUILD_LABEL='22.11.2026 · распознавание каталога Росреестра';
 export function formationParcel(job,proposal){
  const location=job.location||{},usage=job.options.usage==='Приусадебное ЛПХ'?'ЛПХ':job.options.usage;
  const settlement=location.settlement||job.territory.name;

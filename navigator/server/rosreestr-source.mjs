@@ -2,16 +2,36 @@ const CATALOG='https://rosreestr.gov.ru/data-sets/';
 const HOSTS=new Set(['rosreestr.gov.ru','www.rosreestr.gov.ru']);
 export const ROSREESTR_CATALOG=CATALOG;
 function officialURL(value,base=CATALOG){const u=new URL(value,base);if(u.protocol!=='https:'||!HOSTS.has(u.hostname)||u.username||u.password||u.port)throw Error('Разрешены только HTTPS-файлы официального Росреестра.');u.hash='';return u;}
-const entities=s=>s.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ');
+const entities=s=>s.replace(/&amp;/gi,'&').replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'").replace(/&nbsp;/gi,' ').replace(/&#(x[0-9a-f]+|\d+);/gi,(_,n)=>{const code=n[0].toLowerCase()==='x'?parseInt(n.slice(1),16):Number(n);return code>0&&code<=0x10ffff?String.fromCodePoint(code):''});
+const plain=s=>entities(s.replace(/<[^>]*>/g,' ')).replace(/\s+/g,' ').trim();
+function catalogLinks(html){
+ const links=[],document=html.replace(/<!--[\s\S]*?-->/g,''),markup=document.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'');
+ for(const m of markup.matchAll(/<a\b[^>]*\bhref\s*=\s*(?:["']([^"']+)["']|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi))links.push({value:entities(m[1]||m[2]),title:plain(m[3]).slice(0,300)});
+ for(const m of markup.matchAll(/\bdata-(?:href|url|download)\s*=\s*["']([^"']+)["']/gi))links.push({value:entities(m[1]),title:''});
+ // Read only declarative JSON. Never execute page scripts or fetch JS endpoints.
+ for(const m of document.matchAll(/<script\b[^>]*\btype\s*=\s*["']application\/(?:ld\+)?json["'][^>]*>([\s\S]*?)<\/script\s*>/gi)){
+  try{let visited=0;function visit(v,depth=0){if(++visited>30000||depth>20)return;if(typeof v==='string'){if(/\.csv(?:[?#]|$)/i.test(v))links.push({value:v,title:''})}else if(v&&typeof v==='object')for(const x of Object.values(v))visit(x,depth+1)}visit(JSON.parse(m[1]));}catch{/* Unknown JSON is not interpreted as code. */}
+ }
+ return links;
+}
 export function discoverDealFiles(html){
  const files=[],seen=new Set();
- for(const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a\s*>/gi)){
-  try{const url=officialURL(entities(m[1]));let decoded;try{decoded=decodeURIComponent(url.pathname)}catch{continue}const title=entities(m[2].replace(/<[^>]*>/g,' ')).replace(/\s+/g,' ').trim().slice(0,300),name=decoded.split('/').at(-1);
-   if(!/\.csv$/i.test(name)||!/(сделк|deal)/i.test(name+' '+title)||seen.has(url.href))continue;
+ for(const link of catalogLinks(html)){
+  try{const url=officialURL(link.value);let decoded;try{decoded=decodeURIComponent(url.pathname)}catch{continue}const title=link.title,name=decoded.split('/').at(-1);
+   if(!/\.csv$/i.test(name)||!/(сделк|sdelk|deal)/i.test(name+' '+title)||seen.has(url.href))continue;
    seen.add(url.href);const period=name.match(/(?:^|_)y_(20\d{2})_q_([1-4])(?:\D|$)/i);files.push({id:url.href,url:url.href,name,title,period:period?`${period[1]}-Q${period[2]}`:null});
   }catch{/* External links, scripts and unrelated datasets are never fetched. */}
  }
  return files.sort((a,b)=>(b.period||'').localeCompare(a.period||'')||a.name.localeCompare(b.name)).slice(0,40);
+}
+export function inspectCatalogResponse(html,contentType='',byteLength=0){
+ const title=plain(html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i)?.[1]||'').slice(0,200);
+ const visible=plain(html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi,''));
+ const accessCheck=/(captcha|access denied|доступ запрещ|проверка (?:браузера|доступа)|проверку безопасности|подтвердите.{0,30}(?:робот|человек)|checking your browser|verify you are human|just a moment)/i.test(title+' '+visible);
+ const javascriptRequired=/(enable javascript|включите javascript|необходимо включить javascript)/i.test(visible);
+ const links=catalogLinks(html),fileNames=[];
+ for(const link of links){try{const u=officialURL(link.value),name=decodeURIComponent(u.pathname).split('/').at(-1);if(/\.(csv|zip|xlsx?|pdf|docx?)$/i.test(name)&&!fileNames.includes(name)&&fileNames.length<20)fileNames.push(name.slice(0,200));}catch{}}
+ return {title,contentType:contentType.slice(0,120),byteLength,linkCount:links.length,scriptCount:[...html.matchAll(/<script\b/gi)].length,accessCheck,javascriptRequired,fileNames};
 }
 export function csvPreview(bytes){
  let encoding='utf-8',text;
@@ -56,8 +76,8 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
   busy=true;lastCall=clock();const checkedAt=new Date(clock()).toISOString();let attempt;
   try{const catalog=await fetchOfficial(CATALOG);attempt={checkedAt,status:catalog.status,httpStatus:catalog.httpStatus,catalogURL:CATALOG,files:[],message:catalog.message};
    if(catalog.status==='available'){
-    const html=new TextDecoder().decode(catalog.bytes),files=discoverDealFiles(html);attempt.files=files;
-    if(!files.length){attempt.status='schema_unknown';attempt.message='Каталог открылся, но ссылки на CSV сделок не распознаны. Нужна проверка формата источника.';}
+    const html=new TextDecoder().decode(catalog.bytes),page=inspectCatalogResponse(html,catalog.contentType,catalog.bytes.length);attempt.page=page;const files=page.accessCheck?[]:discoverDealFiles(html);attempt.files=files;
+    if(!files.length){attempt.status=page.accessCheck?'access_check':'schema_unknown';attempt.message=page.accessCheck?'Вместо файлов получена страница проверки доступа. Сделки не загружены.':page.javascriptRequired?'Для страницы требуется JavaScript. Ссылки на файлы в полученном ответе отсутствуют; сделки не загружены.':'Сервер ответил, но ссылки на CSV сделок не найдены. Доступ к каталогу и формат ответа пока не подтверждены; это не означает отсутствие сделок.';}
     else {const sample=await fetchOfficial(files[0].url,{prefix:true});attempt.sampleHTTP=sample.httpStatus;
      if(sample.status==='available'){attempt.sample={file:files[0],...csvPreview(sample.bytes)};attempt.status='sample_received';attempt.message='Получен образец CSV Росреестра. Назначение столбцов и правила отбора ещё нужно подтвердить; цены не добавлены в расчёт.';}
      else {attempt.status=sample.status;attempt.message=sample.message;attempt.retryAfter=sample.retryAfter;}
