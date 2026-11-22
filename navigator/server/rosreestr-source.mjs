@@ -32,6 +32,10 @@ export function discoverDealFiles(html,base=CATALOG){
  }
  return files.sort((a,b)=>(b.period||'').localeCompare(a.period||'')||b.version-a.version||a.name.localeCompare(b.name)).slice(0,40);
 }
+function discoverDocumentation(html,base){
+ const result=[],seen=new Set();for(const link of catalogLinks(html)){try{const url=officialURL(link.value,base),name=decodePathName(url.pathname).split('/').at(-1);if(!url.pathname.startsWith('/data-sets/')||!/\.pdf$/i.test(name)||!/(описан|справочник)/i.test(name)||seen.has(url.href))continue;seen.add(url.href);result.push({url:url.href,name});}catch{}}
+ return result.slice(0,3);
+}
 export function transactionWindow(now){
  const end=new Date(now),start=new Date(now);start.setUTCFullYear(start.getUTCFullYear()-1);
  return {from:start.toISOString(),to:end.toISOString(),months:12};
@@ -61,21 +65,27 @@ export function inspectCatalogResponse(html,contentType='',byteLength=0,base=CAT
  for(const link of links){try{const u=officialURL(link.value,base),name=decodePathName(u.pathname).split('/').at(-1);if(u.pathname.startsWith('/data-sets/')&&publishedLinks.length<24)publishedLinks.push({href:(u.origin+u.pathname).slice(0,1200),title:link.title,name:decodePathName(u.pathname).slice(0,300)});if(/\.(csv|zip|xlsx?|pdf|docx?)$/i.test(name)&&!fileNames.includes(name)&&fileNames.length<20)fileNames.push(name.slice(0,200));}catch{}}
  return {title,contentType:contentType.slice(0,120),byteLength,linkCount:links.length,scriptCount:[...html.matchAll(/<script\b/gi)].length,accessCheck,javascriptRequired,fileNames,publishedLinks};
 }
-export function csvPreview(bytes){
- let encoding='utf-8',text;
+function decodeCSV(bytes){
+ let encoding='utf-8';
  if(bytes[0]===255&&bytes[1]===254)encoding='utf-16le';else if(bytes[0]===254&&bytes[1]===255)encoding='utf-16be';
- try{text=new TextDecoder(encoding,{fatal:true}).decode(bytes,{stream:true})}catch{encoding='windows-1251';text=new TextDecoder(encoding).decode(bytes)}
- text=text.replace(/^\uFEFF/,'');if(/^\s*</.test(text))throw Error('Вместо CSV получена HTML-страница. Цены не загружены.');
+ else {const n=Math.min(bytes.length,400);let even=0,odd=0;for(let i=0;i<n;i++)if(bytes[i]===0){if(i%2)odd++;else even++}if(odd>n/5&&even<n/20)encoding='utf-16le';else if(even>n/5&&odd<n/20)encoding='utf-16be';}
+ let text;try{text=new TextDecoder(encoding,{fatal:true}).decode(bytes,{stream:true})}catch{encoding='windows-1251';text=new TextDecoder(encoding).decode(bytes)}
+ return {encoding,text:text.replace(/^\uFEFF/,'')};
+}
+function formatProbe(bytes){const {encoding,text}=decodeCSV(bytes);return {encoding,byteLength:bytes.length,firstBytesHex:Buffer.from(bytes.subarray(0,32)).toString('hex'),...( /^\s*</.test(text)?{html:true}:{lines:text.split(/\r\n|\n|\r/).slice(0,5).map(line=>line.slice(0,1000))})};}
+export function csvPreview(bytes){
+ let {encoding,text}=decodeCSV(bytes);if(/^\s*</.test(text))throw Error('Вместо CSV получена HTML-страница. Цены не загружены.');
+ const hint=text.match(/^sep=([;,\t|])\r?\n/i);if(hint)text=text.slice(hint[0].length);
  function parse(delimiter){const records=[];let row=[],field='',quoted=false;
   for(let i=0;i<text.length&&records.length<9;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){field+='"';i++;}else quoted=!quoted;}
    else if(!quoted&&c===delimiter){row.push(field);field='';}else if(!quoted&&(c==='\n'||c==='\r')){if(c==='\r'&&text[i+1]==='\n')i++;row.push(field);if(row.some(x=>x.trim()))records.push(row);row=[];field='';}
    else field+=c;
   }
-  // The byte prefix can end mid-record; only complete lines are shown.
   return records;
  }
- const candidates=[';',',','\t'].map(delimiter=>({delimiter,records:parse(delimiter)})).sort((a,b)=>(b.records[0]?.length||0)-(a.records[0]?.length||0)),best=candidates[0];
- if((best.records[0]?.length||0)<3)throw Error('Структура CSV не распознана. Цены не загружены.');
+ const delimiters=hint?[hint[1]]:[';',',','\t','|'];
+ const candidates=delimiters.map(delimiter=>{const records=parse(delimiter),width=records[0]?.length||0;return {delimiter,records,width,consistent:width>=3?records.slice(1).filter(row=>row.length===width).length:-1}}).sort((a,b)=>b.consistent-a.consistent||b.width-a.width),best=candidates[0];
+ if(best.width<3)throw Error('Структура CSV не распознана. Цены не загружены.');
  const headers=best.records[0].map(s=>s.trim().slice(0,300));if(headers.length>80)throw Error('Неожиданно много полей в выгрузке.');
  const rows=best.records.slice(1).filter(row=>row.length===headers.length).map(row=>row.map(v=>v.slice(0,1000)));
  return {encoding,delimiter:best.delimiter,headers,rows,schemaStatus:'unverified',calculationImport:false};
@@ -84,27 +94,27 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
  db.exec('CREATE TABLE IF NOT EXISTS rosreestr_source_state(id INTEGER PRIMARY KEY,payload TEXT NOT NULL);');let busy=false,lastCall=null;
  const read=()=>{const r=db.prepare('SELECT payload FROM rosreestr_source_state WHERE id=1').get();return r?JSON.parse(r.payload):null};
  const save=d=>db.prepare('INSERT INTO rosreestr_source_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(JSON.stringify(d));
- function status(){return {...read(),busy,catalogURL:CATALOG,connected:false,notice:'Образец официальной выгрузки ещё не является подключёнными сделками для расчёта. Личные сведения и Telegram не запрашиваются.'};}
- async function fetchOfficial(url,{prefix=false}={}){
+ function status(){const saved=read();return {...saved,cacheCount:saved?.prefixCache?.length||0,busy,catalogURL:CATALOG,connected:false,notice:'Образец официальной выгрузки ещё не является подключёнными сделками для расчёта. Личные сведения и Telegram не запрашиваются.'};}
+ async function fetchOfficial(url,{prefix=false,document=false}={}){
   let target=officialURL(url);const signal=AbortSignal.timeout(timeout);
   for(let hop=0;hop<4;hop++){
-   const response=await fetchImpl(target,{headers:{accept:prefix?'application/zip,text/csv,application/octet-stream;q=0.8':'text/html',...(prefix?{range:'bytes=0-65535'}:{})},credentials:'omit',redirect:'manual',signal});
+   const response=await fetchImpl(target,{headers:{accept:prefix?'application/zip,text/csv,application/octet-stream;q=0.8':document?'application/pdf':'text/html',...(prefix?{range:'bytes=0-65535'}:{})},credentials:'omit',redirect:'manual',signal});
    if([301,302,303,307,308].includes(response.status)){const location=response.headers.get('location');await response.body?.cancel();if(!location)throw Error('Источник перенаправил запрос без адреса.');target=officialURL(location,target);continue;}
    const base={url:target.href,httpStatus:response.status};
    if(!response.ok){await response.body?.cancel();return {...base,status:response.status===403?'denied':response.status===429?'limited':'unavailable',retryAfter:response.headers.get('retry-after'),message:`Росреестр вернул HTTP ${response.status}. Данные о сделках не получены.`};}
-   const limit=prefix?65536:3000000,reader=response.body?.getReader();if(!reader)throw Error('Источник вернул пустой ответ.');const chunks=[];let size=0;
-   try{while(true){const {done,value}=await reader.read();if(done)break;const take=prefix?value.subarray(0,Math.max(0,limit-size)):value;size+=take.length;if(size>limit){await reader.cancel();throw Error('Страница каталога слишком велика.');}chunks.push(take);if(prefix&&size>=limit){await reader.cancel();break;}}}finally{reader.releaseLock();}
+   const limit=prefix?65536:document?524288:3000000,reader=response.body?.getReader();if(!reader)throw Error('Источник вернул пустой ответ.');const chunks=[];let size=0;
+   try{while(true){const {done,value}=await reader.read();if(done)break;const take=prefix?value.subarray(0,Math.max(0,limit-size)):value;size+=take.length;if(size>limit){await reader.cancel();throw Error(document?'Описание формата превышает лимит 512 КиБ.':'Страница каталога слишком велика.');}chunks.push(take);if(prefix&&size>=limit){await reader.cancel();break;}}}finally{reader.releaseLock();}
    const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
-   return {...base,status:'available',bytes,contentType:response.headers.get('content-type')||''};
+   return {...base,status:'available',bytes,contentType:response.headers.get('content-type')||'',contentRange:response.headers.get('content-range')||null};
   }
   throw Error('Слишком много перенаправлений официального источника.');
  }
  async function probe(){
   if(busy)throw Error('Проверка источника уже идёт.');if(lastCall!==null&&clock()-lastCall<30000)throw Error('Повторить проверку можно через 30 секунд.');const previous=read();if(previous?.retryAt&&clock()<previous.retryAt)throw Error('Источник попросил подождать до '+new Date(previous.retryAt).toLocaleString('ru-RU'));
-  busy=true;lastCall=clock();const checkedAt=new Date(clock()).toISOString();let attempt;
-  try{const catalog=await fetchOfficial(CATALOG);const window=transactionWindow(clock());attempt={checkedAt,status:catalog.status,httpStatus:catalog.httpStatus,catalogURL:CATALOG,window,folders:[],files:[],samples:[],message:catalog.message};
+  busy=true;lastCall=clock();const checkedAt=new Date(clock()).toISOString();let attempt;const captured=[],documents=[];
+  try{const catalog=await fetchOfficial(CATALOG);const window=transactionWindow(clock());attempt={checkedAt,status:catalog.status,httpStatus:catalog.httpStatus,catalogURL:CATALOG,window,folders:[],files:[],samples:[],fileReads:[],message:catalog.message};
    if(catalog.status==='available'){
-    const html=decodeCatalog(catalog.bytes,catalog.contentType),page=inspectCatalogResponse(html,catalog.contentType,catalog.bytes.length,catalog.url);attempt.page=page;
+    const html=decodeCatalog(catalog.bytes,catalog.contentType),documentation=discoverDocumentation(html,catalog.url),page=inspectCatalogResponse(html,catalog.contentType,catalog.bytes.length,catalog.url);attempt.page=page;
     if(page.accessCheck){attempt.status='access_check';attempt.message='Вместо файлов получена страница проверки доступа. Сделки не загружены.';}
     else {
      const addFiles=(content,base,folder)=>{for(const file of discoverDealFiles(content,base)){
@@ -130,9 +140,24 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
        for(const file of selected){
         const sample=await fetchOfficial(file.url,{prefix:true});attempt.sampleHTTP=sample.httpStatus;
         if(sample.status!=='available'){attempt.status=sample.status;attempt.message=sample.message;attempt.retryAfter=sample.retryAfter;break;}
-        const unpacked=file.format==='zip'?await zipCSVPrefix(sample.bytes):{bytes:sample.bytes};const preview={file,...csvPreview(unpacked.bytes),...(unpacked.archive?{archive:unpacked.archive}:{})};attempt.samples.push(preview);attempt.sample??=preview;
+        const entry={file,downloadedAt:checkedAt,httpStatus:sample.httpStatus,contentType:sample.contentType,contentRange:sample.contentRange,prefixBase64:Buffer.from(sample.bytes).toString('base64'),prefixByteLength:sample.bytes.length,window};
+        // Public file data only: do not export an HTML challenge as raw page code.
+        const isZIP=sample.bytes[0]===0x50&&sample.bytes[1]===0x4b;
+        if(file.format==='zip'&&!isZIP||file.format!=='zip'&&formatProbe(sample.bytes).html){attempt.fileReads.push({file,httpStatus:sample.httpStatus,status:'schema_unknown',message:'Вместо таблицы или ZIP получен другой ответ.',page:inspectCatalogResponse(decodeCatalog(sample.bytes,sample.contentType),sample.contentType,sample.bytes.length,sample.url)});continue;}
+        captured.push(entry);persist({...attempt,status:'collecting',message:`Сохранено фрагментов: ${captured.length}. Читаем опубликованные периоды за последние 12 месяцев.`},previous,captured);await parseCapture(entry,attempt);
        }
-       if(attempt.status==='available'){attempt.status='sample_received';attempt.message=`За последние 12 месяцев найдены файлы сделок. Получено образцов: ${attempt.samples.length}. Это образцы опубликованных кварталов, а не полная выгрузка сделок за год; цены ещё не добавлены в расчёт.`;}
+       if(attempt.status==='available')summarize(attempt);
+       if(captured.length&&!['denied','limited','unavailable','access_check'].includes(attempt.status)){
+        attempt.documentation=[];
+        for(const item of documentation){
+         try{const result=await fetchOfficial(item.url,{document:true}),record={...item,httpStatus:result.httpStatus,status:result.status};attempt.documentation.push(record);
+          if(result.status!=='available'){if(result.status==='limited'){attempt.status='limited';attempt.retryAfter=result.retryAfter;attempt.message=result.message;}break;}
+          if(!Buffer.from(result.bytes.subarray(0,5)).equals(Buffer.from('%PDF-'))){record.status='schema_unknown';record.message='Вместо PDF получен другой ответ.';continue;}
+          record.status='pdf_received';record.byteLength=result.bytes.length;documents.push({...record,downloadedAt:checkedAt,pdfBase64:Buffer.from(result.bytes).toString('base64')});
+          persist({...attempt,status:'collecting',message:`Сохранено фрагментов: ${captured.length}, описаний формата: ${documents.length}.`},previous,captured,documents);
+         }catch(e){attempt.documentation.push({...item,status:'unavailable',message:e.message});break;}
+        }
+       }
       }
      }
     }
@@ -140,7 +165,32 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
   }catch(e){attempt={...attempt,checkedAt,catalogURL:CATALOG,status:e.name==='TimeoutError'?'timeout':'unavailable',message:e.name==='TimeoutError'?'Росреестр не ответил вовремя. Получение сделок пока недоступно.':'Не удалось получить и распознать официальный файл: '+e.message,files:attempt?.files||[]};}
   finally{busy=false;}
   if(attempt.status==='limited'){const sec=Number(attempt.retryAfter),date=Date.parse(attempt.retryAfter||'');attempt.retryAt=Math.max(clock()+30000,sec>0?clock()+sec*1000:Number.isFinite(date)?date:clock()+60000);}
-  const next={lastAttempt:attempt,lastSample:attempt.sample?{checkedAt,sample:attempt.sample,samples:attempt.samples}:previous?.lastSample||null,retryAt:attempt.retryAt||null};save(next);return status();
+  return persist(attempt,previous,captured,documents);
  }
- return {status,probe};
+ async function parseCapture(entry,attempt){
+  const record={file:entry.file,httpStatus:entry.httpStatus,downloadedAt:entry.downloadedAt,prefixRetained:true,stage:'archive'};attempt.fileReads.push(record);
+  try{
+   const downloaded=Buffer.from(entry.prefixBase64,'base64');if(downloaded.length>65536)throw Error('Превышен лимит сохранённого фрагмента.');
+   const unpacked=entry.file.format==='zip'?await zipCSVPrefix(downloaded):{bytes:downloaded};record.stage='csv';
+   const probe=formatProbe(unpacked.bytes);entry.archive=unpacked.archive||null;record.archive=entry.archive;record.formatProbe=probe;
+   if(!probe.html)entry.csvPrefixBase64=Buffer.from(unpacked.bytes).toString('base64');
+   const preview={file:entry.file,...csvPreview(unpacked.bytes),...(unpacked.archive?{archive:unpacked.archive}:{})};attempt.samples.push(preview);attempt.sample??=preview;record.status='parsed';
+  }catch(e){record.status='schema_unknown';record.message=e.message;}
+ }
+ function summarize(attempt){const errors=attempt.fileReads.filter(r=>r.status!=='parsed').length;
+  attempt.status=errors?'schema_unknown':'sample_received';attempt.message=errors?`Фрагментов сохранено: ${attempt.fileReads.filter(r=>r.prefixRetained).length}; таблиц распознано: ${attempt.samples.length}; ошибок формата: ${errors}. Исходные фрагменты включены в отчёт и доступны для повторного разбора без скачивания. Цены не добавлены в расчёт.`:`За последние 12 месяцев получено образцов: ${attempt.samples.length}. ${attempt.fromCache?'Повторный разбор выполнен из сохранённых файлов, новых запросов к Росреестру нет.':'Исходные фрагменты сохранены для повторного разбора без скачивания.'} Это не полная выгрузка сделок за год; цены ещё не добавлены в расчёт.`;
+ }
+ function persist(attempt,previous,captured,documents=[]){
+  const merged=new Map((previous?.prefixCache||[]).map(c=>[c.file.url,c]));for(const c of captured)merged.set(c.file.url,c);
+  const seenPeriods=new Set(),prefixCache=[...merged.values()].sort((a,b)=>(b.file.period||b.file.catalogPeriod||'').localeCompare(a.file.period||a.file.catalogPeriod||'')||(b.file.version||1)-(a.file.version||1)||b.downloadedAt.localeCompare(a.downloadedAt)).filter(c=>{const key=c.file.period||c.file.catalogPeriod||c.file.url;if(seenPeriods.has(key))return false;seenPeriods.add(key);return true}).slice(0,5);
+  const docs=new Map((previous?.documentationCache||[]).map(d=>[d.url,d]));for(const d of documents)docs.set(d.url,d);
+  save({lastAttempt:attempt,lastSample:attempt.sample?{checkedAt:attempt.checkedAt,sample:attempt.sample,samples:attempt.samples}:previous?.lastSample||null,retryAt:attempt.retryAt||(attempt.fromCache?previous?.retryAt:null)||null,prefixCache,documentationCache:[...docs.values()].slice(0,3)});return status();
+ }
+ async function reparse(){
+  if(busy)throw Error('Проверка источника уже идёт.');const previous=read(),window=transactionWindow(clock()),cached=(previous?.prefixCache||[]).filter(c=>{const period=c.file.period||c.file.catalogPeriod;return !period||overlapsWindow(period,window)}).map(c=>({...c,file:{...c.file,partialPeriod:partialPeriod(c.file.period||c.file.catalogPeriod,window)}}));if(!cached.length)throw Error('Сохранённых фрагментов за последние 12 месяцев нет. Сначала проверь источник.');
+  busy=true;const checkedAt=new Date(clock()).toISOString(),attempt={checkedAt,status:'available',httpStatus:null,catalogURL:CATALOG,window,folders:[],files:cached.map(c=>c.file),samples:[],fileReads:[],fromCache:true,networkRequests:0};
+  try{for(const entry of cached)await parseCapture(entry,attempt);summarize(attempt)}finally{busy=false}
+  return persist(attempt,previous,cached);
+ }
+ return {status,probe,reparse};
 }

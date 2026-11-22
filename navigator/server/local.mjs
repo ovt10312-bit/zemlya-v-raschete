@@ -40,7 +40,7 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
 
  if(url.pathname==='/api/rosreestr/source'){
   if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
-  try{const result=req.method==='GET'?rosreestr.status():req.method==='POST'?await rosreestr.probe():null;res.writeHead(result?200:405,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result||{error:'Метод не поддерживается'}));}
+  try{let result=null;if(req.method==='GET')result=rosreestr.status();else if(req.method==='POST'){const action=JSON.parse(body.toString()||'{}').action??'probe';if(action!=='probe'&&action!=='reparse')throw Error('Неизвестное действие источника.');result=action==='reparse'?await rosreestr.reparse():await rosreestr.probe();}res.writeHead(result?200:405,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result||{error:'Метод не поддерживается'}));}
   catch(e){res.writeHead(400,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({error:e.message}));}return;
  }
  if(url.pathname.startsWith('/api/nspd/')){
