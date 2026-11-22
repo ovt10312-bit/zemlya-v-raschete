@@ -75,7 +75,7 @@ function decodeCSV(bytes){
 function formatProbe(bytes){const {encoding,text}=decodeCSV(bytes);return {encoding,byteLength:bytes.length,firstBytesHex:Buffer.from(bytes.subarray(0,32)).toString('hex'),...( /^\s*</.test(text)?{html:true}:{lines:text.split(/\r\n|\n|\r/).slice(0,5).map(line=>line.slice(0,1000))})};}
 export function csvPreview(bytes){
  let {encoding,text}=decodeCSV(bytes);if(/^\s*</.test(text))throw Error('Вместо CSV получена HTML-страница. Цены не загружены.');
- const hint=text.match(/^sep=([;,\t|])\r?\n/i);if(hint)text=text.slice(hint[0].length);
+ const hint=text.match(/^sep=([;,\t|~])\r?\n/i);if(hint)text=text.slice(hint[0].length);
  function parse(delimiter){const records=[];let row=[],field='',quoted=false;
   for(let i=0;i<text.length&&records.length<9;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){field+='"';i++;}else quoted=!quoted;}
    else if(!quoted&&c===delimiter){row.push(field);field='';}else if(!quoted&&(c==='\n'||c==='\r')){if(c==='\r'&&text[i+1]==='\n')i++;row.push(field);if(row.some(x=>x.trim()))records.push(row);row=[];field='';}
@@ -83,12 +83,13 @@ export function csvPreview(bytes){
   }
   return records;
  }
- const delimiters=hint?[hint[1]]:[';',',','\t','|'];
+ const delimiters=hint?[hint[1]]:[';',',','\t','|','~'];
  const candidates=delimiters.map(delimiter=>{const records=parse(delimiter),width=records[0]?.length||0;return {delimiter,records,width,consistent:width>=3?records.slice(1).filter(row=>row.length===width).length:-1}}).sort((a,b)=>b.consistent-a.consistent||b.width-a.width),best=candidates[0];
  if(best.width<3)throw Error('Структура CSV не распознана. Цены не загружены.');
  const headers=best.records[0].map(s=>s.trim().slice(0,300));if(headers.length>80)throw Error('Неожиданно много полей в выгрузке.');
  const rows=best.records.slice(1).filter(row=>row.length===headers.length).map(row=>row.map(v=>v.slice(0,1000)));
- return {encoding,delimiter:best.delimiter,headers,rows,schemaStatus:'unverified',calculationImport:false};
+ const expected=['okato','region_code','district','city','quarter_cad_number','street','realestate_type_code','wall_material_code','year_build','floor','purpose_code','area','period_start_date','deal_price','currency','doc_type'];const official=headers.length===17&&['number','deals_number'].includes(headers[0])&&expected.every((h,i)=>headers[i+1]===h);
+ return {encoding,delimiter:best.delimiter,headers,rows,schemaStatus:official?'official_columns_recognized':'unverified',...(official?{dataset:{version:headers[0]==='deals_number'?2:1,rowKind:'quarterly_group',dateKind:'quarter_start',hasParcelCadastre:false,priceKind:headers[0]==='deals_number'?'contract_or_allocated_proportional_to_cadastral_value':'contract_or_virtual_land_share_20_percent',notice:'Строка может объединять несколько сделок/объектов. Площадь и цена суммарные, дата — начало квартала. Кадастрового номера отдельного объекта нет.'}}:{}),calculationImport:false};
 }
 export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>Date.now(),timeout=12000}){
  db.exec('CREATE TABLE IF NOT EXISTS rosreestr_source_state(id INTEGER PRIMARY KEY,payload TEXT NOT NULL);');let busy=false,lastCall=null;
