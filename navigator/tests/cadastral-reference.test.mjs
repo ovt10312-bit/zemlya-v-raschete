@@ -48,3 +48,5 @@ test('foreign source layers, unresolved identities and source conflicts are not 
 test('bounded details do not truncate aggregate statistics and unknown observation dates remain unknown',()=>{
  const result=cadastralReference([parcel(1,{checkedAt:null}),parcel(2),parcel(3)],{...options,maxDetails:1});assert.equal(result.sampleCount,3);assert.equal(result.samples.length,1);assert.equal(result.samplesTruncated,true);assert.equal(result.missingSourceDates,1);assert.equal(result.meanPerSotka,20000);
 });
+
+test('cadastral cost reference is limited to the selected cadastral quarter',()=>{const a=parcel(1),b=parcel(2,{cost:900000});b.name='40:04:010301:2';b.attributes.cad_num=b.name;const result=cadastralReference([a,b],{...options,quarterCadastre:'40:04:010802'});assert.equal(result.quarterCadastre,'40:04:010802');assert.equal(result.sampleCount,1);assert.equal(result.meanPerSotka,20000);assert.equal(result.excluded.different_quarter,1);const absent=cadastralReference([a,b],{...options,quarterCadastre:'40:04:999999'});assert.equal(absent.meanPerSotka,null)});

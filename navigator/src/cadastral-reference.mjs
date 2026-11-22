@@ -1,3 +1,4 @@
+import {cadastralQuarter} from './cadastral-quarter.mjs';
 import {geometryWithin} from './nspd-geometry.mjs';
 
 const CADASTRE=/^\d{2}:\d{2}:\d+:\d+$/;
@@ -63,7 +64,7 @@ function rounded(value){return Number.isFinite(value)?Math.round(value*1e6)/1e6:
  * explicit user value. Mean/estimatedTotal are estimates, not official valuation
  * of a newly drawn contour. Rates, coefficients and rent are never supplied.
  */
-export function cadastralReference(objects,{boundary,settlement='',region='',usage:usageOption,areaMinM2=600,areaMaxM2=2000,referenceCadastre=null,targetAreaM2=null,sourceScanId=null,maxDetails=50}={}){
+export function cadastralReference(objects,{boundary,settlement='',region='',usage:usageOption,areaMinM2=600,areaMaxM2=2000,referenceCadastre=null,targetAreaM2=null,sourceScanId=null,maxDetails=50,quarterCadastre=null}={}){
  const selectedUsage=requestedUsage(usageOption);
  if(!selectedUsage)throw Error('Выбери ИЖС, приусадебное ЛПХ или садоводство для кадастрового ориентира.');
  if(!Number.isFinite(areaMinM2)||!Number.isFinite(areaMaxM2)||areaMinM2<=0||areaMaxM2<areaMinM2)throw Error('Некорректный диапазон площади кадастровой выборки.');
@@ -74,7 +75,7 @@ export function cadastralReference(objects,{boundary,settlement='',region='',usa
  for(const object of Array.isArray(objects)?objects:[]){
   if(!object||typeof object!=='object'){reject('invalid_object');continue;}
   if(String(object.layerId)!=='36048'||Number(object.categoryId)!==36368){reject('different_layer');continue;}
-  const value=scalar(object);if(value.issue){reject(value.issue);continue;}
+  const value=scalar(object);if(quarterCadastre&&cadastralQuarter(value.cadastre)!==cadastralQuarter(quarterCadastre)){reject('different_quarter');continue;}if(value.issue){reject(value.issue);continue;}
   const list=groups.get(value.key)||[];list.push({object,value});groups.set(value.key,list);
  }
  for(const entries of groups.values()){
@@ -104,5 +105,5 @@ export function cadastralReference(objects,{boundary,settlement='',region='',usa
  const count=samples.length,totalCost=samples.reduce((n,s)=>n+s.costRub,0),totalArea=samples.reduce((n,s)=>n+s.areaM2,0),mean=count?samples.reduce((n,s)=>n+s.costPerSotka,0)/count:null;
  const meanPerSotka=rounded(mean),medianPerSotka=rounded(middle(samples.map(s=>s.costPerSotka))),weightedMeanPerSotka=count?rounded(totalCost/totalArea*100):null;
  const dates=samples.map(s=>s.checkedAt).filter(Boolean).sort((a,b)=>Date.parse(a)-Date.parse(b));
- return {status:!scopeUsable||!count?'unavailable':count<3?'insufficient_data':'available',settlement,region,usage:USAGE_NAMES[selectedUsage],unit:'RUB/sotka',areaMinM2,areaMaxM2,source:'НСПД · ЕГРН',sourceScanId,sampleCount:count,duplicateCount,meanPerSotka,medianPerSotka,weightedMeanPerSotka,estimatedTotal:meanPerSotka!==null&&Number.isFinite(targetAreaM2)&&targetAreaM2>0?rounded(meanPerSotka*targetAreaM2/100):null,sourceCheckedAt:{oldest:dates[0]||null,latest:dates.at(-1)||null},missingSourceDates:count-dates.length,referenceParcel,excluded,samples:samples.slice(0,maxDetails).map(s=>({...s,costPerSotka:rounded(s.costPerSotka)})),samplesTruncated:count>maxDetails,economics:{cadastrePerSotka:meanPerSotka},notice:!count?'Нет сопоставимых кадастровых сведений; значение не подставляется.':count<3?'Предварительный ориентир по малой выборке. Среднее за сотку не является официальной стоимостью нового контура.':'Среднее кадастровой стоимости за сотку по сохранённой выборке. Это ориентир, не официальная стоимость нового контура.'};
+ return {quarterCadastre:cadastralQuarter(quarterCadastre),status:!scopeUsable||!count?'unavailable':count<3?'insufficient_data':'available',settlement,region,usage:USAGE_NAMES[selectedUsage],unit:'RUB/sotka',areaMinM2,areaMaxM2,source:'НСПД · ЕГРН',sourceScanId,sampleCount:count,duplicateCount,meanPerSotka,medianPerSotka,weightedMeanPerSotka,estimatedTotal:meanPerSotka!==null&&Number.isFinite(targetAreaM2)&&targetAreaM2>0?rounded(meanPerSotka*targetAreaM2/100):null,sourceCheckedAt:{oldest:dates[0]||null,latest:dates.at(-1)||null},missingSourceDates:count-dates.length,referenceParcel,excluded,samples:samples.slice(0,maxDetails).map(s=>({...s,costPerSotka:rounded(s.costPerSotka)})),samplesTruncated:count>maxDetails,economics:{cadastrePerSotka:meanPerSotka},notice:!count?'Нет сопоставимых кадастровых сведений; значение не подставляется.':count<3?'Предварительный ориентир по малой выборке. Среднее за сотку не является официальной стоимостью нового контура.':'Среднее кадастровой стоимости за сотку по сохранённой выборке. Это ориентир, не официальная стоимость нового контура.'};
 }
