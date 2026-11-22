@@ -133,8 +133,12 @@ Sub CreateShortcuts(scriptPath)
   shortcut.TargetPath = launchPath
   shortcut.Arguments = Q(scriptPath)
   shortcut.WorkingDirectory = appDir
-  shortcut.Description = "Открыть Навигатор без чёрного окна"
-  shortcut.IconLocation = sh.ExpandEnvironmentStrings("%WINDIR%\System32\shell32.dll") & ",13"
+  shortcut.Description = "Земля Навигатор — поиск участков и расчёт экономики"
+  If fs.FileExists(appDir & "\public\icons\zemlya-navigator-n.ico") Then
+    shortcut.IconLocation = appDir & "\public\icons\zemlya-navigator-n.ico,0"
+  Else
+    shortcut.IconLocation = sh.ExpandEnvironmentStrings("%WINDIR%\System32\shell32.dll") & ",13"
+  End If
   shortcut.Save
   Set shortcut = sh.CreateShortcut(desktopDir & "\Остановить Навигатор.lnk")
   shortcut.TargetPath = launchPath
