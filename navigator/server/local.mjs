@@ -1,9 +1,11 @@
+import {createRosreestrSource} from './rosreestr-source.mjs';
 import {createNspdService} from './nspd.mjs';
 import {createMailService,emailPage,verificationPage} from './mail.mjs';
 import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mkdirSync,existsSync,readFileSync,writeFileSync} from 'node:fs';import path from 'node:path';import {randomBytes,scryptSync,timingSafeEqual,createHash} from 'node:crypto';import {saveFormationParcel,handleAPI,schema} from './service.mjs';
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
 const nspd=createNspdService({db});
+const rosreestr=createRosreestrSource({db});
 const DB = {
   prepare(sql) {
     return {
@@ -36,6 +38,11 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
  if(!session){if(url.pathname.startsWith('/api/')){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Войди в локальный кабинет'}));}else{res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(authPage(!account));}return;}
 
 
+ if(url.pathname==='/api/rosreestr/source'){
+  if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
+  try{const result=req.method==='GET'?rosreestr.status():req.method==='POST'?await rosreestr.probe():null;res.writeHead(result?200:405,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result||{error:'Метод не поддерживается'}));}
+  catch(e){res.writeHead(400,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({error:e.message}));}return;
+ }
  if(url.pathname.startsWith('/api/nspd/')){
   if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
   try{
