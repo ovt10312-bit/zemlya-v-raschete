@@ -2,6 +2,13 @@ const CATALOG='https://rosreestr.gov.ru/data-sets/';
 const HOSTS=new Set(['rosreestr.gov.ru','www.rosreestr.gov.ru']);
 export const ROSREESTR_CATALOG=CATALOG;
 function officialURL(value,base=CATALOG){const u=new URL(value,base);if(u.protocol!=='https:'||!HOSTS.has(u.hostname)||u.username||u.password||u.port)throw Error('Разрешены только HTTPS-файлы официального Росреестра.');u.hash='';return u;}
+// Decode names for matching only; always request the original published URL.
+function decodePathName(value){return value.replace(/(?:%[0-9a-f]{2})+/gi,part=>{const bytes=Uint8Array.from(part.match(/[0-9a-f]{2}/gi),h=>parseInt(h,16));try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes)}catch{return new TextDecoder('windows-1251').decode(bytes)}});}
+function decodeCatalog(bytes,contentType=''){
+ const hint=contentType+' '+new TextDecoder('latin1').decode(bytes.subarray(0,4096));
+ if(/charset\s*=\s*["']?(?:windows-1251|cp1251)/i.test(hint))return new TextDecoder('windows-1251').decode(bytes);
+ try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes)}catch{return new TextDecoder('windows-1251').decode(bytes)}
+}
 const entities=s=>s.replace(/&amp;/gi,'&').replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'").replace(/&nbsp;/gi,' ').replace(/&#(x[0-9a-f]+|\d+);/gi,(_,n)=>{const code=n[0].toLowerCase()==='x'?parseInt(n.slice(1),16):Number(n);return code>0&&code<=0x10ffff?String.fromCodePoint(code):''});
 const plain=s=>entities(s.replace(/<[^>]*>/g,' ')).replace(/\s+/g,' ').trim();
 function catalogLinks(html){
@@ -17,7 +24,7 @@ function catalogLinks(html){
 export function discoverDealFiles(html,base=CATALOG){
  const files=[],seen=new Set();
  for(const link of catalogLinks(html)){
-  try{const url=officialURL(link.value,base);let decoded;try{decoded=decodeURIComponent(url.pathname)}catch{continue}const title=link.title,name=decoded.split('/').at(-1);
+  try{const url=officialURL(link.value,base);const decoded=decodePathName(url.pathname);const title=link.title,name=decoded.split('/').at(-1);
    if(!/\.csv$/i.test(name)||!/(сделк|sdelk|deal)/i.test(name+' '+title)||seen.has(url.href))continue;
    seen.add(url.href);const period=name.match(/(?:^|_)y_(20\d{2})_q_([1-4])(?:\D|$)/i);files.push({id:url.href,url:url.href,name,title,period:period?`${period[1]}-Q${period[2]}`:null});
   }catch{/* External links, scripts and unrelated datasets are never fetched. */}
@@ -36,7 +43,7 @@ export function discoverQuarterFolders(html,base=CATALOG,window=transactionWindo
  for(const link of catalogLinks(html)){
   try{const url=officialURL(link.value,parent);if(url.search||!url.pathname.startsWith(parent.pathname)||!url.pathname.endsWith('/'))continue;
    const relative=url.pathname.slice(parent.pathname.length);if(!relative||relative.slice(0,-1).includes('/'))continue;
-   const name=decodeURIComponent(relative.slice(0,-1)),text=name.replace(/_/g,' '),m=text.match(/^([1-4])\s*квартал\s*(20\d{2})(?:\D|$)/i);if(!m)continue;
+   const name=decodePathName(relative.slice(0,-1)),text=name.replace(/_/g,' '),m=text.match(/^([1-4])\s*квартал\s*(20\d{2})(?:\D|$)/i);if(!m)continue;
    const period=`${m[2]}-Q${m[1]}`;if(!overlapsWindow(period,window))continue;
    const version=Number(text.match(/верси[яи]\s*(\d+)/i)?.[1]||1),entry={url:url.href,name,period,version,partialPeriod:partialPeriod(period,window)};
    if(!found.has(period)||version>found.get(period).version)found.set(period,entry);
@@ -44,14 +51,14 @@ export function discoverQuarterFolders(html,base=CATALOG,window=transactionWindo
  }
  return [...found.values()].sort((a,b)=>b.period.localeCompare(a.period)).slice(0,5);
 }
-export function inspectCatalogResponse(html,contentType='',byteLength=0){
+export function inspectCatalogResponse(html,contentType='',byteLength=0,base=CATALOG){
  const title=plain(html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i)?.[1]||'').slice(0,200);
  const visible=plain(html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi,''));
  const accessCheck=/(captcha|access denied|доступ запрещ|проверка (?:браузера|доступа)|проверку безопасности|подтвердите.{0,30}(?:робот|человек)|checking your browser|verify you are human|just a moment)/i.test(title+' '+visible);
  const javascriptRequired=/(enable javascript|включите javascript|необходимо включить javascript)/i.test(visible);
- const links=catalogLinks(html),fileNames=[];
- for(const link of links){try{const u=officialURL(link.value),name=decodeURIComponent(u.pathname).split('/').at(-1);if(/\.(csv|zip|xlsx?|pdf|docx?)$/i.test(name)&&!fileNames.includes(name)&&fileNames.length<20)fileNames.push(name.slice(0,200));}catch{}}
- return {title,contentType:contentType.slice(0,120),byteLength,linkCount:links.length,scriptCount:[...html.matchAll(/<script\b/gi)].length,accessCheck,javascriptRequired,fileNames};
+ const links=catalogLinks(html),fileNames=[],publishedLinks=[];
+ for(const link of links){try{const u=officialURL(link.value,base),name=decodePathName(u.pathname).split('/').at(-1);if(u.pathname.startsWith('/data-sets/')&&publishedLinks.length<24)publishedLinks.push({href:(u.origin+u.pathname).slice(0,1200),title:link.title,name:decodePathName(u.pathname).slice(0,300)});if(/\.(csv|zip|xlsx?|pdf|docx?)$/i.test(name)&&!fileNames.includes(name)&&fileNames.length<20)fileNames.push(name.slice(0,200));}catch{}}
+ return {title,contentType:contentType.slice(0,120),byteLength,linkCount:links.length,scriptCount:[...html.matchAll(/<script\b/gi)].length,accessCheck,javascriptRequired,fileNames,publishedLinks};
 }
 export function csvPreview(bytes){
  let encoding='utf-8',text;
@@ -96,7 +103,7 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
   busy=true;lastCall=clock();const checkedAt=new Date(clock()).toISOString();let attempt;
   try{const catalog=await fetchOfficial(CATALOG);const window=transactionWindow(clock());attempt={checkedAt,status:catalog.status,httpStatus:catalog.httpStatus,catalogURL:CATALOG,window,folders:[],files:[],samples:[],message:catalog.message};
    if(catalog.status==='available'){
-    const html=new TextDecoder().decode(catalog.bytes),page=inspectCatalogResponse(html,catalog.contentType,catalog.bytes.length);attempt.page=page;
+    const html=decodeCatalog(catalog.bytes,catalog.contentType),page=inspectCatalogResponse(html,catalog.contentType,catalog.bytes.length,catalog.url);attempt.page=page;
     if(page.accessCheck){attempt.status='access_check';attempt.message='Вместо файлов получена страница проверки доступа. Сделки не загружены.';}
     else {
      const addFiles=(content,base,folder)=>{for(const file of discoverDealFiles(content,base)){
@@ -109,7 +116,7 @@ export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>D
      for(const folder of folders){
       const result=await fetchOfficial(folder.url),record={...folder,httpStatus:result.httpStatus,status:result.status};attempt.folders.push(record);
       if(result.status!=='available'){attempt.status=result.status;attempt.message=result.message;attempt.retryAfter=result.retryAfter;break;}
-      const content=new TextDecoder().decode(result.bytes);record.page=inspectCatalogResponse(content,result.contentType,result.bytes.length);
+      const content=decodeCatalog(result.bytes,result.contentType);record.page=inspectCatalogResponse(content,result.contentType,result.bytes.length,result.url);
       if(record.page.accessCheck){record.status='access_check';attempt.status='access_check';attempt.message='Папка периода вернула страницу проверки доступа. Сделки не загружены.';break;}
       const before=attempt.files.length;addFiles(content,result.url,folder);record.fileCount=attempt.files.length-before;
      }

@@ -66,3 +66,23 @@ test('quarterly preview failure retains earlier period samples without reporting
 test('direct root files outside the requested year are excluded; unknown file dates remain explicitly unknown',async()=>{
  const requested=[];const f=fixture(async(url,options)=>{requested.push(String(url));return options.headers.range?new Response(csv):new Response('<a href="old_deals_y_2024_q_4.csv">Сделки</a><a href="deals.csv">Сделки</a>')});try{const r=await f.source.probe();assert.equal(r.lastAttempt.samples.length,1);assert.equal(r.lastAttempt.sample.file.period,null);assert.equal(r.lastAttempt.sample.file.partialPeriod,null);assert.ok(!requested.some(x=>x.includes('2024')));}finally{f.db.close()}
 });
+
+const legacyFolder='3%20%EA%E2%E0%F0%F2%E0%EB%202026%E3.,%20%E2%E5%F0%F1%E8%FF%202/';
+const legacyFile='dataset_%D1%C4%C5%CB%CA%C8_y_2026_q_3.csv';
+test('legacy Cyrillic percent encoding is recognized while retaining the exact published folder and CSV bytes',()=>{
+ const base='https://rosreestr.gov.ru/data-sets/',window=transactionWindow(Date.parse('2026-11-22'));
+ const folders=discoverQuarterFolders(`<a href="${legacyFolder}">3 квартал 2026г., версия 2/</a>`,base,window);
+ assert.equal(folders.length,1);assert.equal(folders[0].name,'3 квартал 2026г., версия 2');assert.equal(folders[0].version,2);assert.equal(folders[0].url,base+legacyFolder);
+ const files=discoverDealFiles(`<a href="${legacyFile}">Сделки</a>`,folders[0].url);assert.equal(files[0].name,'dataset_СДЕЛКИ_y_2026_q_3.csv');assert.equal(files[0].url,base+legacyFolder+legacyFile);
+ const page=inspectCatalogResponse(`<a href="${legacyFolder}?token=SECRET">Квартал</a><a href="%CE%EF%E8%F1%E0%ED%E8%E5.pdf">Описание</a>`);assert.deepEqual(page.fileNames,['Описание.pdf']);assert.equal(page.publishedLinks[0].href,base+legacyFolder);assert.ok(!JSON.stringify(page).includes('SECRET'));
+});
+test('legacy quarterly catalog reaches sample using original byte-encoded URLs, with no Unicode URL reconstruction',async()=>{
+ const calls=[];const f=fixture(async(url,options)=>{calls.push(String(url));return options.headers.range?new Response(csv):calls.length===1?new Response(`<title>Index of /data-sets/</title><a href="${legacyFolder}">Квартал</a>`):new Response(`<a href="${legacyFile}">Сделки</a>`)});
+ try{const r=await f.source.probe();assert.equal(r.lastAttempt.status,'sample_received');assert.deepEqual(calls,['https://rosreestr.gov.ru/data-sets/','https://rosreestr.gov.ru/data-sets/'+legacyFolder,'https://rosreestr.gov.ru/data-sets/'+legacyFolder+legacyFile]);assert.equal(r.lastAttempt.sample.rows.length,1);}finally{f.db.close()}
+});
+test('legacy HTML bodies are decoded from declared charset or invalid UTF8, leaving UTF8 unaffected',async()=>{
+ const alphabet=new TextDecoder('windows-1251').decode(Uint8Array.from({length:256},(_,i)=>i));
+ const content=`<title>Каталог Росреестра</title><a href="${legacyFolder}">Квартал</a>`;
+ const bytes=Uint8Array.from(content,c=>{const i=alphabet.indexOf(c);assert.ok(i>=0);return i});
+ for(const type of ['text/html; charset=windows-1251','text/html']){const f=fixture(async(url,options)=>options.headers.range?new Response(csv):new URL(url).pathname==='/data-sets/'?new Response(bytes,{headers:{'content-type':type}}):new Response(`<a href="${legacyFile}">Сделки</a>`));try{const r=await f.source.probe();assert.equal(r.lastAttempt.page.title,'Каталог Росреестра');assert.equal(r.lastAttempt.status,'sample_received');}finally{f.db.close()}}
+});
