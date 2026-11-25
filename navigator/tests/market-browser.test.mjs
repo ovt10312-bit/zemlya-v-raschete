@@ -40,12 +40,12 @@ test('repeated searches reuse one dedicated browser and replace only owned sourc
 });
 test('automatic Avito flow starts at the real homepage and stops on challenge before UI clicks',async()=>{
  const browser=fakeBrowser({body:'Доступ ограничен'});const ctx=await browser.launch();const page=await ctx.newPage();
- await assert.rejects(selectAvitoSearch(page,input),error=>error.stage==='access_check');
+ await assert.rejects(selectAvitoSearch(page,input,{accessWaitMs:0}),error=>error.stage==='access_check');
  assert.equal(page.url(),'https://www.avito.ru/');assert.equal(browser.stats().navigations,1);
 });
 test('automatic Avito flow selects the exact region and follows the actual category link',async()=>{
  let url='',chosen='',typed='';
- const list=items=>({count:async()=>items.length,nth:i=>items[i],first:()=>({waitFor:async()=>{}})});
+ const list=items=>({count:async()=>items.length,nth:i=>items[i],first:()=>({waitFor:async()=>{}}),filter(){return this}});
  const button=action=>({isVisible:async()=>true,click:async()=>action(),innerText:async()=>''});
  const options=['Кондрово, другой регион','Кондрово, Калужская область'].map(text=>({...button(()=>{chosen=text}),innerText:async()=>text}));
  const field={isVisible:async()=>true,fill:async value=>{typed=value}};
@@ -58,7 +58,7 @@ test('automatic Avito flow selects the exact region and follows the actual categ
    if(selector.startsWith('[role="option"]'))return list(options);
    return list([button(()=>{})]);
   },
-  getByRole(role,{name}){return role==='link'&&name==='Земельные участки'?list([button(()=>{url='https://www.avito.ru/public-location-from-site/zemelnye_uchastki'})]):list([])}
+  getByRole(role,{name}={}){return role==='link'&&name==='Земельные участки'?list([button(()=>{url='https://www.avito.ru/public-location-from-site/zemelnye_uchastki'})]):list([])}
  };
  const result=await selectAvitoSearch(page,input);
  assert.equal(typed,'Кондрово');assert.equal(chosen,'Кондрово, Калужская область');assert.equal(result,'https://www.avito.ru/public-location-from-site/zemelnye_uchastki');

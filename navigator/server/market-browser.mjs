@@ -16,9 +16,37 @@ export function locationMatches(text,settlement,region){
  const contains=value=>{const wanted=normalize(value).split(/[^\p{L}\p{N}]+/u).filter(Boolean);return wanted.length>0&&words.some((_,i)=>wanted.every((w,j)=>words[i+j]===w));};
  return contains(settlement)&&contains(region);
 }
-export async function accessCheck(page){
+export async function inspectAccessCheck(page){
+ const title=typeof page.title==='function'?await page.title():'';
+ if(/^(?:captcha|проверка доступа|проверка браузера)(?:\s|$)|access denied|verify you are human|checking your browser/i.test(title.trim()))return {kind:'challenge_title',title:title.slice(0,160)};
  const text=(await page.locator('body').innerText({timeout:3000})).slice(0,100000);
- return /доступ\s+(?:ограничен|запрещ[её]н)|подтвердите.{0,40}(?:человек|робот)|проверка\s+браузера|слишком много запросов|access denied|captcha/i.test(text)||await page.locator('iframe[src*="captcha"], js-challenge-loader, #id_captcha_frame_div').count()>0;
+ if(/доступ\s+(?:ограничен|запрещ[её]н)|подтвердите.{0,40}(?:человек|робот)|проверка\s+браузера|слишком много запросов|access denied|verify you are human/i.test(text))return {kind:'visible_challenge_text',title:title.slice(0,160)};
+ const frames=page.locator('iframe[src*="captcha"], js-challenge-loader, #id_captcha_frame_div');
+ for(let i=0;i<Math.min(await frames.count(),10);i++){
+  const item=frames.nth(i);if(!await item.isVisible())continue;
+  if(typeof item.getAttribute==='function'&&await item.getAttribute('aria-hidden')==='true')continue;
+  const box=typeof item.boundingBox==='function'?await item.boundingBox():null;
+  // Preloaded hidden frames and small background badges are not an active
+  // challenge. Never interact with a visible challenge or solve it.
+  if(box&&(box.width<120||box.height<70))continue;
+  return {kind:'visible_challenge_element',title:title.slice(0,160)};
+ }
+ return null;
+}
+export const accessCheck=async page=>!!await inspectAccessCheck(page);
+export async function denyAvitoGeolocation(context,page){
+ if(typeof context.newCDPSession!=='function')return null;
+ const session=await context.newCDPSession(page);
+ try{for(const origin of ['https://www.avito.ru','https://avito.ru'])await session.send('Browser.setPermission',{origin,permission:{name:'geolocation'},setting:'denied'});return 'denied'}finally{await session.detach()}
+}
+export async function dismissGeolocationNotice(page){
+ if(typeof page.getByRole!=='function')return false;
+ const dialogs=page.getByRole('dialog').filter({hasText:/разреш.{0,60}(?:местоположен|геолокац)|(?:использовать|определить).{0,25}(?:ваше|текущее).{0,25}местоположен/i});
+ for(let i=0;i<Math.min(await dialogs.count(),5);i++){
+  const dialog=dialogs.nth(i);if(!await dialog.isVisible())continue;
+  if(await clickVisible(dialog.getByRole('button',{name:/^(?:Не сейчас|Позже|Нет, спасибо|Не разрешать|Отклонить|Закрыть|Указать город вручную|Выбрать город вручную)$/i})))return true;
+ }
+ return false;
 }
 export async function readCianVisibleFacts(page,settlement){
  if(typeof page.evaluate!=='function')return {};
@@ -41,13 +69,26 @@ export async function readCianVisibleFacts(page,settlement){
 async function visible(loc){for(let i=0;i<Math.min(await loc.count(),30);i++){const item=loc.nth(i);if(await item.isVisible())return item}return null;}
 async function clickVisible(loc){const item=await visible(loc);if(!item)return false;await item.click({timeout:5000});return true;}
 function stageError(stage,message){return Object.assign(Error(message),{stage})}
-async function assertAccess(page){if(await accessCheck(page))throw stageError('access_check','Сайт показал проверку доступа. Автоматический сбор остановлен; окно браузера оставлено открытым.');}
+export async function waitForAccessCheck(page,{waitMs=0,clock=Date.now,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+ const deadline=clock()+Math.max(0,Math.min(10000,waitMs));let evidence=await inspectAccessCheck(page);
+ while(evidence&&clock()<deadline){await pause(Math.min(400,deadline-clock()));evidence=await inspectAccessCheck(page)}
+ if(evidence)throw Object.assign(stageError('access_check','Видимая проверка доступа не исчезла после ожидания. Сбор остановлен; вкладка оставлена открытой.'),{accessEvidence:evidence});
+}
+const assertAccess=(page,options)=>waitForAccessCheck(page,options);
 
 // Public UI selectors are deliberately bounded. If the public form changes,
 // fail explicitly instead of guessing a city ID or silently using another city.
-export async function selectAvitoSearch(page,input){
+export async function selectAvitoSearch(page,input,{accessWaitMs=10000}={}){
  await page.goto(AVITO_HOME,{waitUntil:'domcontentloaded',timeout:20000});
- await assertAccess(page);
+ await assertAccess(page,{waitMs:accessWaitMs});
+ await dismissGeolocationNotice(page);
+ // Follow the user's ordinary navigation: real estate -> land, then choose
+ // the city explicitly. Only follow actual public links rendered by the site.
+ if(!await clickVisible(page.getByRole('link',{name:'Земельные участки',exact:true}))){
+  if(!await clickVisible(page.getByRole('link',{name:'Недвижимость',exact:true})))await clickVisible(page.getByRole('button',{name:'Недвижимость',exact:true}));
+  if(!await clickVisible(page.getByRole('link',{name:'Земельные участки',exact:true})))throw stageError('category_control','Не удалось распознать категорию «Земельные участки» на Авито.');
+ }
+ await page.waitForLoadState('domcontentloaded');await assertAccess(page,{waitMs:accessWaitMs});await dismissGeolocationNotice(page);
  const location=page.locator('[data-marker="search-form/region"], [data-marker="search-form/location"], [data-marker="search-form/location-picker"]');
  if(!await clickVisible(location)&&!await clickVisible(page.getByRole('button',{name:/Все регионы|Город или регион|Местоположение/i})))throw stageError('location_control','Не удалось распознать выбор города на Авито.');
  const fields=page.locator('input[placeholder*="город" i], input[placeholder*="регион" i], input[data-marker*="location"][type="text"]');
@@ -65,17 +106,14 @@ export async function selectAvitoSearch(page,input){
  if(matches.length!==1)throw stageError('location_ambiguous','Авито не показал однозначный населённый пункт вместе с регионом. Поиск в другом месте не выполнялся.');
  await matches[0].click({timeout:5000});
  await clickVisible(page.getByRole('button',{name:/^(?:Показать|Применить|Выбрать)(?:\s|$)/i}));
- if(!await clickVisible(page.getByRole('link',{name:'Земельные участки',exact:true}))){
-  await clickVisible(page.getByRole('link',{name:'Недвижимость',exact:true}));
-  if(!await clickVisible(page.getByRole('link',{name:'Земельные участки',exact:true})))throw stageError('category_control','Не удалось распознать категорию «Земельные участки» на Авито.');
- }
- await page.waitForLoadState('domcontentloaded');await assertAccess(page);
+ await dismissGeolocationNotice(page);
+ await page.waitForLoadState('domcontentloaded');await assertAccess(page,{waitMs:accessWaitMs});
  const url=publicMarketURL(page.url(),'Авито');
  if(!new URL(url).pathname.includes('/zemelnye_uchastki'))throw stageError('category_unconfirmed','Авито не подтвердил страницу земельных участков.');
  return url;
 }
 
-export function createBrowserMarkets({root,launch,platform=process.platform,cianOptions={}}={}){
+export function createBrowserMarkets({root,launch,platform=process.platform,cianOptions={},avitoAccessWaitMs=10000}={}){
  let contextPromise;const active=new Set(),pages=new Map();
  async function context(){
   if(!contextPromise)contextPromise=(async()=>{
@@ -102,6 +140,7 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
   try{
    const ctx=await context();await pages.get(source)?.close().catch(()=>{});
    page=await ctx.newPage();pages.set(source,page);page.setDefaultTimeout(5000);
+   if(source==='Авито'){stage='location_permission';base.geolocation=await denyAvitoGeolocation(ctx,page);}
    // Main-page navigation remains within the chosen public source, including redirects.
    await page.route('**/*',async route=>{
     // Playwright event callbacks run outside run()'s try/catch. A closed page
@@ -118,9 +157,10 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
     const abort=()=>{page.close().catch(()=>{})};options.signal?.addEventListener('abort',abort,{once:true});
     try{
      const response=await page.goto(target,{waitUntil:'domcontentloaded',timeout:15000});
-     publicMarketURL(page.url(),source);try{await assertAccess(page)}catch(e){accessFailure=e;throw e}
+     publicMarketURL(page.url(),source);try{await assertAccess(page,{waitMs:source==='Авито'?Math.min(5000,avitoAccessWaitMs):0})}catch(e){accessFailure=e;throw e}
      const html=await page.content();if(Buffer.byteLength(html)>3000000)throw Error('Страница слишком большая для безопасного чтения.');
      const result=new Response(html,{status:response?.status()||200,headers:{'content-type':'text/html; charset=utf-8',...(response?.headers()['retry-after']?{'retry-after':response.headers()['retry-after']}: {})}});
+     result.marketAccessChecked=true;
      if(source==='ЦИАН')result.marketFacts=await readCianVisibleFacts(page,input.settlement);
      return result;
     }catch(error){
@@ -132,7 +172,7 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
     }finally{options.signal?.removeEventListener('abort',abort)}
    };
    let searchURL=input.searchURL;
-   if(source==='Авито'&&!searchURL){stage='select_location_category';requests++;searchURL=await selectAvitoSearch(page,input);}
+   if(source==='Авито'&&!searchURL){stage='select_location_category';requests++;searchURL=await selectAvitoSearch(page,input,{accessWaitMs:avitoAccessWaitMs});}
    const result=await(source==='Авито'?searchAvito:searchCian)({...input,searchURL},{...(source==='ЦИАН'?cianOptions:{}),fetchImpl});
    // Avito search cards may link to offers rather than contain complete facts.
    // Read at most 25 actual public offer links; never paginate or invent links.
@@ -145,8 +185,8 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
     for(const url of urls){if(Date.now()>deadline)break;const offer=await searchAvito({...input,searchURL:url},{fetchImpl});if(accessFailure)throw accessFailure;if(!['available','schema_unknown'].includes(offer.status))return {...offer,...base,requests,status:offer.status,message:offer.message};for(const item of offer.listings||[])if(!listings.some(a=>a.url===item.url))listings.push(item);}
     if(listings.length)return {...result,transport:'visible_browser',requests,listings,connected:true,status:'available',message:`Прочитано подтверждённых предложений Авито: ${listings.length}. Это цены объявлений.`};
    }
-   return {...result,transport:'visible_browser',requests};
-  }catch(e){return {...base,requests,status:e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,message:e.message||'Не удалось выполнить поиск в браузере.'};}
+   return {...result,transport:'visible_browser',requests,...(source==='Авито'?{geolocation:base.geolocation}:{})};
+  }catch(e){return {...base,requests,status:e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,...(e.accessEvidence?{accessEvidence:e.accessEvidence}:{}),message:e.message||'Не удалось выполнить поиск в браузере.'};}
   finally{active.delete(source);/* Keep the visible page for reviewing the actual result. */}
  }
  return {avito:input=>run('Авито',input),cian:input=>run('ЦИАН',input)};

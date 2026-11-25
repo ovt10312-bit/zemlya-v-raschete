@@ -72,7 +72,7 @@ async function readPage(url,{fetchImpl,clock,timeoutMs=10000,maxBytes=MAX_BYTES}
   if(!response.ok){await response.body?.cancel();return {...metadata,status:response.status===429?'limited':response.status===403?'denied':'unavailable',...(response.status===429?{retryAt:retryAt(response.headers.get('retry-after'),clock())}:{})};}
   const reader=response.body?.getReader();if(!reader)throw Error('Пустой ответ Авито.');const chunks=[];let bytes=0;
   try{while(true){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>Math.min(MAX_BYTES,maxBytes)){await reader.cancel();throw Error('Страница Авито превышает допустимый размер.');}chunks.push(value)}}finally{reader.releaseLock()}
-  return {...metadata,status:'page_received',html:new TextDecoder().decode(Buffer.concat(chunks)),bytes};
+  return {...metadata,status:'page_received',html:new TextDecoder().decode(Buffer.concat(chunks)),bytes,visibilityChecked:response.marketAccessChecked===true};
  }
  throw Error('Слишком много перенаправлений Авито.');
 }
@@ -85,7 +85,7 @@ export async function searchAvito(input,options={}){
  try{
   const page=await readPage(request.searchURL,{...options,fetchImpl:options.fetchImpl||nodeFetch,clock});const metadata={...result,requests:page.requests,httpStatus:page.httpStatus,searchURL:page.url};
   if(page.status!=='page_received')return {...metadata,status:page.status,...(page.retryAt?{retryAt:page.retryAt}:{}),message:`Авито вернул HTTP ${page.httpStatus}. Рыночные цены не получены.`};
-  if(challenge(page.html))return {...metadata,status:'denied',reason:'access_check',message:'Авито показал проверку доступа. Сбор остановлен, цены не получены.'};
+  if(!page.visibilityChecked&&challenge(page.html))return {...metadata,status:'denied',reason:'access_check',message:'Авито показал проверку доступа. Сбор остановлен, цены не получены.'};
   const extracted=extractAvitoJSONLD(page.html,request,{checkedAt,baseURL:page.url});
   return {...metadata,...extracted,status:extracted.listings.length?'available':'schema_unknown',connected:extracted.listings.length>0,message:extracted.listings.length?`Прочитано подтверждённых предложений Авито: ${extracted.listings.length}. Это цены объявлений; сведения соседних населённых пунктов сохранены отдельно.`:'В полученной странице не найдены подходящие предложения с подтверждёнными ценой, площадью, назначением и местом. Текущий формат Авито не подтверждён; это не означает отсутствие объявлений.'};
  }catch(e){return {...result,status:e.name==='TimeoutError'?'timeout':'unavailable',message:e.name==='TimeoutError'?'Авито не ответил вовремя. Рыночные цены не получены.':'Получение Авито недоступно: '+e.message}}
