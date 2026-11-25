@@ -20,6 +20,24 @@ export async function accessCheck(page){
  const text=(await page.locator('body').innerText({timeout:3000})).slice(0,100000);
  return /доступ\s+(?:ограничен|запрещ[её]н)|подтвердите.{0,40}(?:человек|робот)|проверка\s+браузера|слишком много запросов|access denied|captcha/i.test(text)||await page.locator('iframe[src*="captcha"], js-challenge-loader, #id_captcha_frame_div').count()>0;
 }
+export async function readCianVisibleFacts(page,settlement){
+ if(typeof page.evaluate!=='function')return {};
+ return page.evaluate(({settlement})=>{
+  const lines=(document.body?.innerText||'').split(/\n/).map(t=>t.trim()).filter(Boolean);
+  function value(labels){for(let i=0;i<lines.length;i++)for(const label of labels){const line=lines[i];if(line===label||line===label+':')return (lines[i+1]||'').slice(0,150);if(line.startsWith(label+':'))return line.slice(label.length+1).trim().slice(0,150)}return ''}
+  const usage=value(['Статус участка','Вид разрешенного использования','Вид разрешённого использования','Разрешенное использование','Разрешённое использование']);
+  const area=value(['Площадь участка']);
+  const cadastre=value(['Кадастровый номер']);
+  const norm=t=>String(t||'').toLowerCase().replace(/ё/g,'е').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const wanted=norm(settlement),localOfferURLs=[];let cardsRecognized=false;
+  for(const a of document.querySelectorAll('a[href*="/sale/suburban/"]')){
+   const card=a.closest('article,[data-name="CardComponent"],[data-testid="offer-card"]');if(!card)continue;
+   cardsRecognized=true;const words=norm(card.innerText);
+   if(words.some((_,i)=>wanted.every((w,j)=>words[i+j]===w)))localOfferURLs.push(a.href);
+  }
+  return {usage,area,cadastre:/^\d{2}:\d{2}:\d{6,7}:\d+$/.test(cadastre)?cadastre:null,cardsRecognized,localOfferURLs:[...new Set(localOfferURLs)].slice(0,25)};
+ },{settlement});
+}
 async function visible(loc){for(let i=0;i<Math.min(await loc.count(),30);i++){const item=loc.nth(i);if(await item.isVisible())return item}return null;}
 async function clickVisible(loc){const item=await visible(loc);if(!item)return false;await item.click({timeout:5000});return true;}
 function stageError(stage,message){return Object.assign(Error(message),{stage})}
@@ -57,7 +75,7 @@ export async function selectAvitoSearch(page,input){
  return url;
 }
 
-export function createBrowserMarkets({root,launch,platform=process.platform}={}){
+export function createBrowserMarkets({root,launch,platform=process.platform,cianOptions={}}={}){
  let contextPromise;const active=new Set(),pages=new Map();
  async function context(){
   if(!contextPromise)contextPromise=(async()=>{
@@ -102,14 +120,23 @@ export function createBrowserMarkets({root,launch,platform=process.platform}={})
      const response=await page.goto(target,{waitUntil:'domcontentloaded',timeout:15000});
      publicMarketURL(page.url(),source);try{await assertAccess(page)}catch(e){accessFailure=e;throw e}
      const html=await page.content();if(Buffer.byteLength(html)>3000000)throw Error('Страница слишком большая для безопасного чтения.');
-     return new Response(html,{status:response?.status()||200,headers:{'content-type':'text/html; charset=utf-8',...(response?.headers()['retry-after']?{'retry-after':response.headers()['retry-after']}: {})}});
+     const result=new Response(html,{status:response?.status()||200,headers:{'content-type':'text/html; charset=utf-8',...(response?.headers()['retry-after']?{'retry-after':response.headers()['retry-after']}: {})}});
+     if(source==='ЦИАН')result.marketFacts=await readCianVisibleFacts(page,input.settlement);
+     return result;
+    }catch(error){
+     // An aborted goto reports "Target ... closed" because our abort callback
+     // closes the page. Preserve the actual timeout instead of blaming the user.
+     if(options.signal?.aborted)throw options.signal.reason;
+     if(/Target (?:page|browser)|context or browser has been closed/i.test(error.message||''))throw stageError('browser_closed','Вкладка или окно поиска были закрыты до завершения.');
+     throw error;
     }finally{options.signal?.removeEventListener('abort',abort)}
    };
    let searchURL=input.searchURL;
    if(source==='Авито'&&!searchURL){stage='select_location_category';requests++;searchURL=await selectAvitoSearch(page,input);}
-   const result=await(source==='Авито'?searchAvito:searchCian)({...input,searchURL},{fetchImpl});
+   const result=await(source==='Авито'?searchAvito:searchCian)({...input,searchURL},{...(source==='ЦИАН'?cianOptions:{}),fetchImpl});
    // Avito search cards may link to offers rather than contain complete facts.
    // Read at most 25 actual public offer links; never paginate or invent links.
+   if(accessFailure&&result.listings?.length)return {...result,status:'partial',stage:'access_check',transport:'visible_browser',requests};
    if(accessFailure)throw accessFailure;
    if(source==='Авито'&&result.status==='schema_unknown'&&requests<=2){
     const links=await page.locator('a[href]').evaluateAll(items=>items.map(a=>a.href));
