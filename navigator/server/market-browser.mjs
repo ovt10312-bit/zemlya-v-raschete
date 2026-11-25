@@ -2,6 +2,7 @@ import path from 'node:path';
 import {existsSync} from 'node:fs';
 import {searchAvito,AVITO_HOME} from './market-avito.mjs';
 import {searchCian} from './market-cian.mjs';
+import {chooseAvitoLandCategory,avitoFormDiagnostics} from './avito-navigation.mjs';
 
 // Ordinary visible browser, dedicated Navigator profile. No personal browser
 // profile, private endpoints, CAPTCHA handling or anti-detection settings.
@@ -75,6 +76,16 @@ export async function waitForAccessCheck(page,{waitMs=0,clock=Date.now,pause=ms=
  if(evidence)throw Object.assign(stageError('access_check','Видимая проверка доступа не исчезла после ожидания. Сбор остановлен; вкладка оставлена открытой.'),{accessEvidence:evidence});
 }
 const assertAccess=(page,options)=>waitForAccessCheck(page,options);
+async function openAvitoLocation(page){
+ const deadline=Date.now()+5000;
+ do{
+  if(await clickVisible(page.locator('[data-marker="search-form/region"], [data-marker="search-form/location"], [data-marker="search-form/location-picker"]')))return;
+  for(const role of ['button','link','combobox'])if(await clickVisible(page.getByRole(role,{name:/^(?:Все регионы|Город или регион|Местоположение|Выбрать город|Изменить город|Выбрать регион)(?:\s|$)/i})))return;
+  if(await visible(page.locator('input[placeholder*="город" i], input[placeholder*="регион" i]')))return;
+  if(Date.now()>=deadline)break;await new Promise(resolve=>setTimeout(resolve,250));
+ }while(Date.now()<=deadline);
+ throw stageError('location_control','Не удалось распознать выбор города на Авито.');
+}
 
 // Public UI selectors are deliberately bounded. If the public form changes,
 // fail explicitly instead of guessing a city ID or silently using another city.
@@ -84,13 +95,9 @@ export async function selectAvitoSearch(page,input,{accessWaitMs=10000}={}){
  await dismissGeolocationNotice(page);
  // Follow the user's ordinary navigation: real estate -> land, then choose
  // the city explicitly. Only follow actual public links rendered by the site.
- if(!await clickVisible(page.getByRole('link',{name:'Земельные участки',exact:true}))){
-  if(!await clickVisible(page.getByRole('link',{name:'Недвижимость',exact:true})))await clickVisible(page.getByRole('button',{name:'Недвижимость',exact:true}));
-  if(!await clickVisible(page.getByRole('link',{name:'Земельные участки',exact:true})))throw stageError('category_control','Не удалось распознать категорию «Земельные участки» на Авито.');
- }
+ await chooseAvitoLandCategory(page,{checkAccess:()=>assertAccess(page,{waitMs:accessWaitMs})});
  await page.waitForLoadState('domcontentloaded');await assertAccess(page,{waitMs:accessWaitMs});await dismissGeolocationNotice(page);
- const location=page.locator('[data-marker="search-form/region"], [data-marker="search-form/location"], [data-marker="search-form/location-picker"]');
- if(!await clickVisible(location)&&!await clickVisible(page.getByRole('button',{name:/Все регионы|Город или регион|Местоположение/i})))throw stageError('location_control','Не удалось распознать выбор города на Авито.');
+ await openAvitoLocation(page);
  const fields=page.locator('input[placeholder*="город" i], input[placeholder*="регион" i], input[data-marker*="location"][type="text"]');
  await fields.first().waitFor({state:'visible',timeout:5000}).catch(()=>{});
  const field=await visible(fields);
@@ -107,6 +114,7 @@ export async function selectAvitoSearch(page,input,{accessWaitMs=10000}={}){
  await matches[0].click({timeout:5000});
  await clickVisible(page.getByRole('button',{name:/^(?:Показать|Применить|Выбрать)(?:\s|$)/i}));
  await dismissGeolocationNotice(page);
+ await clickVisible(page.getByRole('button',{name:/^(?:Найти|Показать)(?:\s|$)/i}));
  await page.waitForLoadState('domcontentloaded');await assertAccess(page,{waitMs:accessWaitMs});
  const url=publicMarketURL(page.url(),'Авито');
  if(!new URL(url).pathname.includes('/zemelnye_uchastki'))throw stageError('category_unconfirmed','Авито не подтвердил страницу земельных участков.');
@@ -186,7 +194,7 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
     if(listings.length)return {...result,transport:'visible_browser',requests,listings,connected:true,status:'available',message:`Прочитано подтверждённых предложений Авито: ${listings.length}. Это цены объявлений.`};
    }
    return {...result,transport:'visible_browser',requests,...(source==='Авито'?{geolocation:base.geolocation}:{})};
-  }catch(e){return {...base,requests,status:e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,...(e.accessEvidence?{accessEvidence:e.accessEvidence}:{}),message:e.message||'Не удалось выполнить поиск в браузере.'};}
+  }catch(e){const uiDiagnostics=source==='Авито'&&page?await avitoFormDiagnostics(page):null;return {...base,requests,status:e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,...(e.accessEvidence?{accessEvidence:e.accessEvidence}:{}),...(uiDiagnostics?{uiDiagnostics}:{}),message:e.message||'Не удалось выполнить поиск в браузере.'};}
   finally{active.delete(source);/* Keep the visible page for reviewing the actual result. */}
  }
  return {avito:input=>run('Авито',input),cian:input=>run('ЦИАН',input)};
