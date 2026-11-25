@@ -1,5 +1,5 @@
 import {REGIONS} from './domain.mjs';
-export const BUILD_LABEL='25.11.2026 · Авито: категории и поиск';
+export const BUILD_LABEL='25.11.2026 · ЦИАН отдельно и статус Авито';
 export function formationParcel(job,proposal){
  const location=job.location||{},usage=job.options.usage==='Приусадебное ЛПХ'?'ЛПХ':job.options.usage;
  const settlement=location.settlement||job.territory.name;const reference=job.cadastralReference?Object.fromEntries(Object.entries(job.cadastralReference).filter(([k])=>k!=='samples')):null;

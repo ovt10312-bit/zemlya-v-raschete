@@ -3,6 +3,7 @@ import {existsSync} from 'node:fs';
 import {searchAvito,AVITO_HOME} from './market-avito.mjs';
 import {searchCian} from './market-cian.mjs';
 import {chooseAvitoLandCategory,avitoFormDiagnostics} from './avito-navigation.mjs';
+import {isIPRestriction} from '../src/market-access.mjs';
 
 // Ordinary visible browser, dedicated Navigator profile. No personal browser
 // profile, private endpoints, CAPTCHA handling or anti-detection settings.
@@ -19,8 +20,11 @@ export function locationMatches(text,settlement,region){
 }
 export async function inspectAccessCheck(page){
  const title=typeof page.title==='function'?await page.title():'';
+ if(isIPRestriction(title))return {kind:'ip_restriction',title:title.slice(0,160)};
+ if(/доступ\s+(?:ограничен|запрещ[её]н)/i.test(title))return {kind:'challenge_title',title:title.slice(0,160)};
  if(/^(?:captcha|проверка доступа|проверка браузера)(?:\s|$)|access denied|verify you are human|checking your browser/i.test(title.trim()))return {kind:'challenge_title',title:title.slice(0,160)};
  const text=(await page.locator('body').innerText({timeout:3000})).slice(0,100000);
+ if(isIPRestriction(text))return {kind:'ip_restriction',title:title.slice(0,160)};
  if(/доступ\s+(?:ограничен|запрещ[её]н)|подтвердите.{0,40}(?:человек|робот)|проверка\s+браузера|слишком много запросов|access denied|verify you are human/i.test(text))return {kind:'visible_challenge_text',title:title.slice(0,160)};
  const frames=page.locator('iframe[src*="captcha"], js-challenge-loader, #id_captcha_frame_div');
  for(let i=0;i<Math.min(await frames.count(),10);i++){
@@ -72,7 +76,8 @@ async function clickVisible(loc){const item=await visible(loc);if(!item)return f
 function stageError(stage,message){return Object.assign(Error(message),{stage})}
 export async function waitForAccessCheck(page,{waitMs=0,clock=Date.now,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
  const deadline=clock()+Math.max(0,Math.min(10000,waitMs));let evidence=await inspectAccessCheck(page);
- while(evidence&&clock()<deadline){await pause(Math.min(400,deadline-clock()));evidence=await inspectAccessCheck(page)}
+ while(evidence&&evidence.kind!=='ip_restriction'&&clock()<deadline){await pause(Math.min(400,deadline-clock()));evidence=await inspectAccessCheck(page)}
+ if(evidence?.kind==='ip_restriction')throw Object.assign(stageError('ip_restricted','Источник ограничил доступ: проблема с IP. Получение цен остановлено.'),{accessEvidence:evidence});
  if(evidence)throw Object.assign(stageError('access_check','Видимая проверка доступа не исчезла после ожидания. Сбор остановлен; вкладка оставлена открытой.'),{accessEvidence:evidence});
 }
 const assertAccess=(page,options)=>waitForAccessCheck(page,options);
@@ -184,7 +189,7 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
    const result=await(source==='Авито'?searchAvito:searchCian)({...input,searchURL},{...(source==='ЦИАН'?cianOptions:{}),fetchImpl});
    // Avito search cards may link to offers rather than contain complete facts.
    // Read at most 25 actual public offer links; never paginate or invent links.
-   if(accessFailure&&result.listings?.length)return {...result,status:'partial',stage:'access_check',transport:'visible_browser',requests};
+   if(accessFailure&&result.listings?.length)return {...result,status:'partial',stage:accessFailure.stage||'access_check',...(accessFailure.stage==='ip_restricted'?{reason:'ip_restricted'}:{}),transport:'visible_browser',requests};
    if(accessFailure)throw accessFailure;
    if(source==='Авито'&&result.status==='schema_unknown'&&requests<=2){
     const links=await page.locator('a[href]').evaluateAll(items=>items.map(a=>a.href));
@@ -194,7 +199,7 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
     if(listings.length)return {...result,transport:'visible_browser',requests,listings,connected:true,status:'available',message:`Прочитано подтверждённых предложений Авито: ${listings.length}. Это цены объявлений.`};
    }
    return {...result,transport:'visible_browser',requests,...(source==='Авито'?{geolocation:base.geolocation}:{})};
-  }catch(e){const uiDiagnostics=source==='Авито'&&page?await avitoFormDiagnostics(page):null;return {...base,requests,status:e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,...(e.accessEvidence?{accessEvidence:e.accessEvidence}:{}),...(uiDiagnostics?{uiDiagnostics}:{}),message:e.message||'Не удалось выполнить поиск в браузере.'};}
+  }catch(e){const uiDiagnostics=source==='Авито'&&page?await avitoFormDiagnostics(page):null;return {...base,requests,status:e.stage==='ip_restricted'?'denied':e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,...(e.stage==='ip_restricted'?{reason:'ip_restricted'}:{}),...(e.accessEvidence?{accessEvidence:e.accessEvidence}:{}),...(uiDiagnostics?{uiDiagnostics}:{}),message:e.message||'Не удалось выполнить поиск в браузере.'};}
   finally{active.delete(source);/* Keep the visible page for reviewing the actual result. */}
  }
  return {avito:input=>run('Авито',input),cian:input=>run('ЦИАН',input)};
