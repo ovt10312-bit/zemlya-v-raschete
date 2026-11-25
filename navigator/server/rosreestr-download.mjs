@@ -1,7 +1,8 @@
+import {nodeFetch} from './node-fetch.mjs';
 import {mkdir,stat,readFile,writeFile,rename,open,statfs} from 'node:fs/promises';import path from 'node:path';import {createHash} from 'node:crypto';
 const MAX=2*1024**3;
 export function archiveURL(value){const u=new URL(value);if(u.protocol!=='https:'||!['rosreestr.gov.ru','www.rosreestr.gov.ru'].includes(u.hostname)||u.port||u.username||u.password||!u.pathname.startsWith('/data-sets/')||!u.pathname.toLowerCase().endsWith('.csv.zip'))throw Error('Нужен официальный ZIP сделок Росреестра.');u.hash='';return u;}
-export async function downloadArchive(file,{root,signal,fetchImpl=fetch,onProgress=()=>{},idleMs=30000}={}){
+export async function downloadArchive(file,{root,signal,fetchImpl=nodeFetch,onProgress=()=>{},idleMs=30000}={}){
  const url=archiveURL(file.url),key=createHash('sha256').update(url.href).digest('hex'),folder=path.join(root,'rosreestr-archives');await mkdir(folder,{recursive:true});const final=path.join(folder,key+'.zip'),part=final+'.part',metaPath=part+'.json';
  try{const s=await stat(final);onProgress(s.size,s.size,true);return {path:final,cached:true,bytes:s.size,downloadedAt:s.mtime.toISOString()};}catch(e){if(e.code!=='ENOENT')throw e;}
  let saved=null,offset=0;try{saved=JSON.parse(await readFile(metaPath,'utf8'));offset=(await stat(part)).size;if(saved.url!==url.href||!saved.validator||offset>MAX)offset=0;}catch{offset=0;}

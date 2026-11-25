@@ -1,3 +1,4 @@
+import {nodeFetch} from './node-fetch.mjs';
 import {zipCSVPrefix} from './rosreestr-zip.mjs';
 const CATALOG='https://rosreestr.gov.ru/data-sets/';
 const HOSTS=new Set(['rosreestr.gov.ru','www.rosreestr.gov.ru']);
@@ -91,7 +92,7 @@ export function csvPreview(bytes){
  const expected=['okato','region_code','district','city','quarter_cad_number','street','realestate_type_code','wall_material_code','year_build','floor','purpose_code','area','period_start_date','deal_price','currency','doc_type'];const official=headers.length===17&&['number','deals_number'].includes(headers[0])&&expected.every((h,i)=>headers[i+1]===h);
  return {encoding,delimiter:best.delimiter,headers,rows,schemaStatus:official?'official_columns_recognized':'unverified',...(official?{dataset:{version:headers[0]==='deals_number'?2:1,rowKind:'quarterly_group',dateKind:'quarter_start',hasParcelCadastre:false,priceKind:headers[0]==='deals_number'?'contract_or_allocated_proportional_to_cadastral_value':'contract_or_virtual_land_share_20_percent',notice:'Строка может объединять несколько сделок/объектов. Площадь и цена суммарные, дата — начало квартала. Кадастрового номера отдельного объекта нет.'}}:{}),calculationImport:false};
 }
-export function createRosreestrSource({db,fetchImpl=globalThis.fetch,clock=()=>Date.now(),timeout=12000}){
+export function createRosreestrSource({db,fetchImpl=nodeFetch,clock=()=>Date.now(),timeout=12000}){
  db.exec('CREATE TABLE IF NOT EXISTS rosreestr_source_state(id INTEGER PRIMARY KEY,payload TEXT NOT NULL);');let busy=false,lastCall=null;
  const read=()=>{const r=db.prepare('SELECT payload FROM rosreestr_source_state WHERE id=1').get();return r?JSON.parse(r.payload):null};
  const save=d=>db.prepare('INSERT INTO rosreestr_source_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(JSON.stringify(d));

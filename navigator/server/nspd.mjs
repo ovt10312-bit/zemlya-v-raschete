@@ -1,3 +1,4 @@
+import {nodeFetch} from './node-fetch.mjs';
 import {cadastralQuarter} from '../src/cadastral-quarter.mjs';
 import {createQuarterResolver} from './nspd-quarter.mjs';
 import {Worker} from 'node:worker_threads';
@@ -13,7 +14,7 @@ import {NSPD_LAYERS,NSPD_PILOT} from '../src/nspd-layers.mjs';
 const ORIGIN='https://nspd.gov.ru';
 const stamp=()=>new Date().toISOString();
 function featureCount(v){const f=v?.features??v?.data?.features;return Array.isArray(f)?f:null;}
-export function createNspdService({db,fetchImpl=globalThis.fetch,timeout=10000,clock=()=>Date.now()}){
+export function createNspdService({db,fetchImpl=nodeFetch,timeout=10000,clock=()=>Date.now()}){
  db.exec('CREATE TABLE IF NOT EXISTS nspd_observations (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL);');
  db.exec('CREATE TABLE IF NOT EXISTS nspd_snapshots (layer_id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL); CREATE TABLE IF NOT EXISTS nspd_snapshot_history (id INTEGER PRIMARY KEY AUTOINCREMENT,layer_id TEXT NOT NULL,checked_at TEXT NOT NULL,payload TEXT NOT NULL);');
  const read=id=>{const r=db.prepare('SELECT payload FROM nspd_observations WHERE id=?').get(id);return r?JSON.parse(r.payload):null;};

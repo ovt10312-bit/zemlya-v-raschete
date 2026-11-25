@@ -1,6 +1,7 @@
+import {nodeFetch} from './node-fetch.mjs';
 import {cadastralQuarter,quarterPriceSummary} from '../src/cadastral-quarter.mjs';
 import {randomUUID,createHash} from 'node:crypto';import {Worker} from 'node:worker_threads';import {unlink} from 'node:fs/promises';import {selectionQuery} from './rosreestr-records.mjs';import {downloadArchive,archiveURL} from './rosreestr-download.mjs';
-export function createRosreestrSelection({db,source,root,clock=Date.now,fetchImpl=fetch,download=downloadArchive}){
+export function createRosreestrSelection({db,source,root,clock=Date.now,fetchImpl=nodeFetch,download=downloadArchive}){
  db.exec('CREATE TABLE IF NOT EXISTS rosreestr_selections(id TEXT PRIMARY KEY,payload TEXT NOT NULL); CREATE TABLE IF NOT EXISTS rosreestr_selected_rows(job_id TEXT NOT NULL,file_id TEXT NOT NULL,line INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(job_id,file_id,line));');
  let active=null,worker=null;const read=id=>{const r=id?db.prepare('SELECT payload FROM rosreestr_selections WHERE id=?').get(id):db.prepare('SELECT payload FROM rosreestr_selections ORDER BY rowid DESC LIMIT 1').get();return r?JSON.parse(r.payload):null};
  const save=j=>{j.updatedAt=new Date(clock()).toISOString();db.prepare('INSERT INTO rosreestr_selections VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(j.id,JSON.stringify(j))};

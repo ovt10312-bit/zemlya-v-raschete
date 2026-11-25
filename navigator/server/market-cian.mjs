@@ -1,3 +1,4 @@
+import {nodeFetch} from './node-fetch.mjs';
 // Ordinary public Cian pages only. No private API, credentials or challenge execution.
 // Live verification on 22.11.2026 returned a Servicepipe JS challenge. The JSON-LD
 // reader below is a supported declarative format, not a claim of live access.
@@ -39,7 +40,7 @@ function comparable(node,query,tierKm,pageURL,checkedAt){
  return {id:'cian-'+link.id,source:CIAN_SOURCE,sourceOfferId:link.id,url:link.url,price,priceKind:'asking',currency:'RUB',areaM2,area:areaM2/100,usage,settlement,region,address:[region,settlement,plain(address.streetAddress)].filter(Boolean).join(', '),coordinates:geo,locationMatch:match,radiusKm:match==='radius'?tierKm:0,distanceKm:distance,sourceCheckedAt:checkedAt,observedAt:checkedAt,date:checkedAt.slice(0,10),dateKind:'observed',publishedAt:published,provenance:{format:'application/ld+json',pageURL,activeAvailability:active,fields:'explicit_source_values'},title:name};
 }
 function retryTimestamp(value,now){const n=Number(value),date=Date.parse(value||'');return Math.max(now+30000,n>0?now+n*1000:Number.isFinite(date)?date:now+60000);}
-export async function searchCian(input,{fetchImpl=globalThis.fetch,clock=()=>Date.now(),timeout=10000,maxRequests=28}={}){
+export async function searchCian(input,{fetchImpl=nodeFetch,clock=()=>Date.now(),timeout=10000,maxRequests=28}={}){
  const checkedAt=new Date(clock()).toISOString(),base={source:CIAN_SOURCE,checkedAt,listings:[],connected:false,requests:0,inspectedListings:0,limit:Math.min(MAX_OFFERS,Math.max(1,Number(input?.limit)||MAX_OFFERS)),diagnostics:[],priceKind:'asking'};
  const usage=input?.usage?usageOf(input.usage):null;if(input?.usage&&!usage)return {...base,status:'invalid_request',message:'Неизвестный вид использования участка.'};
  const areaMinM2=Number(input?.areaMinM2??600),areaMaxM2=Number(input?.areaMaxM2??2000),settlement=plain(input?.settlement),region=plain(input?.region);

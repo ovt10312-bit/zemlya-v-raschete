@@ -1,3 +1,4 @@
+import {nodeFetch} from './node-fetch.mjs';
 // Current Avito markup/API access has NOT been verified from the development
 // network. This adapter reads one explicitly supplied public search page and
 // accepts only self-describing schema.org offers with enough comparable facts.
@@ -82,7 +83,7 @@ export async function searchAvito(input,options={}){
  const result={...base,limit:request.limit};
  if(!request.searchURL)return {...result,status:'schema_unknown',reason:'missing_search_url',searchURL:AVITO_HOME,message:'Автоматический поиск Авито ещё не подтверждён. Нужна реальная публичная ссылка на выдачу; адреса городов и закрытые API не подставляются.'};
  try{
-  const page=await readPage(request.searchURL,{...options,fetchImpl:options.fetchImpl||globalThis.fetch,clock});const metadata={...result,requests:page.requests,httpStatus:page.httpStatus,searchURL:page.url};
+  const page=await readPage(request.searchURL,{...options,fetchImpl:options.fetchImpl||nodeFetch,clock});const metadata={...result,requests:page.requests,httpStatus:page.httpStatus,searchURL:page.url};
   if(page.status!=='page_received')return {...metadata,status:page.status,...(page.retryAt?{retryAt:page.retryAt}:{}),message:`Авито вернул HTTP ${page.httpStatus}. Рыночные цены не получены.`};
   if(challenge(page.html))return {...metadata,status:'denied',reason:'access_check',message:'Авито показал проверку доступа. Сбор остановлен, цены не получены.'};
   const extracted=extractAvitoJSONLD(page.html,request,{checkedAt,baseURL:page.url});
@@ -91,5 +92,5 @@ export async function searchAvito(input,options={}){
 }
 export async function probeAvito(options={}){
  const clock=options.clock||Date.now,checkedAt=new Date(clock()).toISOString(),base={source:'Авито',checkedAt,listings:[],connected:false,requests:0,searchURL:AVITO_HOME};
- try{const page=await readPage(AVITO_HOME,{...options,fetchImpl:options.fetchImpl||globalThis.fetch,clock});const metadata={...base,requests:page.requests,httpStatus:page.httpStatus};if(page.status!=='page_received')return {...metadata,status:page.status,...(page.retryAt?{retryAt:page.retryAt}:{}),message:`Авито вернул HTTP ${page.httpStatus}. Доступ к объявлениям не подтверждён.`};return {...metadata,status:challenge(page.html)?'denied':'schema_unknown',message:'Страница Авито ответила; получение сопоставимых объявлений ещё не подтверждено.'}}catch(e){return {...base,status:e.name==='TimeoutError'?'timeout':'unavailable',message:'Не удалось проверить Авито: '+e.message}}
+ try{const page=await readPage(AVITO_HOME,{...options,fetchImpl:options.fetchImpl||nodeFetch,clock});const metadata={...base,requests:page.requests,httpStatus:page.httpStatus};if(page.status!=='page_received')return {...metadata,status:page.status,...(page.retryAt?{retryAt:page.retryAt}:{}),message:`Авито вернул HTTP ${page.httpStatus}. Доступ к объявлениям не подтверждён.`};return {...metadata,status:challenge(page.html)?'denied':'schema_unknown',message:'Страница Авито ответила; получение сопоставимых объявлений ещё не подтверждено.'}}catch(e){return {...base,status:e.name==='TimeoutError'?'timeout':'unavailable',message:'Не удалось проверить Авито: '+e.message}}
 }
