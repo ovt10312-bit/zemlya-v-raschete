@@ -8,7 +8,7 @@ const norm=v=>String(v||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' '
 const plain=v=>String(v||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;|&#160;/gi,' ').replace(/&amp;/gi,'&').replace(/&quot;/gi,'"').replace(/\s+/g,' ').trim();
 function cianURL(value,base='https://www.cian.ru/'){const url=new URL(value,base);if(url.protocol!=='https:'||!(url.hostname==='cian.ru'||url.hostname.endsWith('.cian.ru'))||url.username||url.password||url.port)throw Error('Допускаются только HTTPS-страницы ЦИАН.');url.hash='';return url;}
 function offerURL(value,base){const url=cianURL(value,base),match=url.pathname.match(/^\/sale\/suburban\/(\d+)\/?$/);if(!match)return null;url.search='';url.pathname=`/sale/suburban/${match[1]}/`;return {url:url.href,id:match[1]};}
-function usageOf(value){const s=norm(value);if(/полев[а-я]*\s+лпх|полев[а-я]*\s+личн/.test(s))return null;if(/\bижс\b|индивидуальн.{0,15}жилищн/.test(s))return 'ИЖС';if(/лпх|личн.{0,12}подсобн/.test(s))return 'ЛПХ';if(/садовод/.test(s))return 'Садоводство';return null;}
+function usageOf(value){const s=norm(value);if(/полев[а-я]*\s+лпх|полев[а-я]*\s+личн/.test(s))return null;if(/(?:^|[^\p{L}\p{N}])ижс(?=$|[^\p{L}\p{N}])|индивидуальн.{0,15}(?:жилищн|жилой)/u.test(s))return 'ИЖС';if(/лпх|личн.{0,12}подсобн/.test(s))return 'ЛПХ';if(/садовод/.test(s))return 'Садоводство';return null;}
 function coordinates(value){if(Array.isArray(value)&&value.length>=2)return coordinates({lng:value[0],lat:value[1]});const lat=Number(value?.latitude??value?.lat),lng=Number(value?.longitude??value?.lng);return Number.isFinite(lat)&&Math.abs(lat)<=90&&Number.isFinite(lng)&&Math.abs(lng)<=180?{lat,lng}:null;}
 function distanceKm(a,b){const rad=Math.PI/180,dlat=(b.lat-a.lat)*rad,dlng=(b.lng-a.lng)*rad;const x=Math.sin(dlat/2)**2+Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dlng/2)**2;return 6371*2*Math.atan2(Math.sqrt(x),Math.sqrt(Math.max(0,1-x)));}
 function areaOf(item){const text=plain(item.name||item.headline);const sqm=text.match(/([\d\s]+(?:[.,]\d+)?)\s*(?:м²|м2|кв\.?\s*м)/i),sot=text.match(/([\d\s]+(?:[.,]\d+)?)\s*сот/i),value=sqm?Number(sqm[1].replace(/\s/g,'').replace(',','.')):sot?Number(sot[1].replace(/\s/g,'').replace(',','.'))*100:null;return value>0?value:null;}
@@ -25,7 +25,7 @@ export function inspectCianPage(html,url){
  return {title,challenge,removed,links,structured:challenge||removed?[]:parseStructured(html),bytes:new TextEncoder().encode(html).length};
 }
 function comparable(node,query,tierKm,pageURL,checkedAt){
- const {item,offer}=node;const name=plain(item.name||item.headline);if(!/^(?:прода[её]тся\s+|продажа\s+)?(?:земельный\s+)?участ(?:ок|ка)\b/i.test(name))return null;
+ const {item,offer}=node;const name=plain(item.name||item.headline);if(!/^(?:прода[её]тся\s+|продажа\s+)?(?:земельный\s+)?участ(?:ок|ка)(?=$|[^\p{L}])/iu.test(name))return null;
  const active=String(offer.availability||item.availability||'').split('/').at(-1);if(!['InStock','LimitedAvailability'].includes(active))return null;
  const currency=String(offer.priceCurrency||offer.priceSpecification?.priceCurrency||'').toUpperCase(),price=Number(offer.price??offer.priceSpecification?.price);if(!['RUB','RUR'].includes(currency)||!Number.isFinite(price)||price<=0)return null;
  const areaM2=areaOf(item);if(!areaM2||areaM2<query.areaMinM2||areaM2>query.areaMaxM2)return null;

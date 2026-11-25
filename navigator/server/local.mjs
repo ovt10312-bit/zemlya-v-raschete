@@ -1,6 +1,7 @@
 import {createContourOpener} from './contour-open.mjs';
 import {createRosreestrSelection} from './rosreestr-selection.mjs';
 import {createMarketService} from './market-service.mjs';
+import {createBrowserMarkets} from './market-browser.mjs';
 import {createRosreestrSource} from './rosreestr-source.mjs';
 import {createNspdService} from './nspd.mjs';
 import {createMailService,emailPage,verificationPage} from './mail.mjs';
@@ -8,7 +9,7 @@ import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mk
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
 const nspd=createNspdService({db});
-const rosreestr=createRosreestrSource({db});const dealSelection=createRosreestrSelection({db,source:rosreestr,root});const market=createMarketService({db});
+const rosreestr=createRosreestrSource({db});const dealSelection=createRosreestrSelection({db,source:rosreestr,root});const browserMarkets=createBrowserMarkets({root});const market=createMarketService({db,...browserMarkets});
 const DB = {
   prepare(sql) {
     return {
