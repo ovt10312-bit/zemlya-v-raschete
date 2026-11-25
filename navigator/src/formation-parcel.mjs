@@ -1,5 +1,5 @@
 import {REGIONS} from './domain.mjs';
-export const BUILD_LABEL='22.11.2026 · цены по кадастровым кварталам';
+export const BUILD_LABEL='25.11.2026 · открытие карточки без ожидания НСПД';
 export function formationParcel(job,proposal){
  const location=job.location||{},usage=job.options.usage==='Приусадебное ЛПХ'?'ЛПХ':job.options.usage;
  const settlement=location.settlement||job.territory.name;const reference=job.cadastralReference?Object.fromEntries(Object.entries(job.cadastralReference).filter(([k])=>k!=='samples')):null;

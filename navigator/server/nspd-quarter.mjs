@@ -12,5 +12,6 @@ export function createQuarterResolver({db,query,clock=Date.now}){
  if(locks.has(key))return {quarterCadastre:null,quarterOrigin:'unknown',quarterMessage:'Определяем квартал.'};locks.add(key);
  try{const r=await query(geometry),value={...(r.status==='available'?quarterFromGeometry(geometry,r.objects,{possiblyTruncated:r.possiblyTruncated}):{quarterCadastre:null,quarterOrigin:'unknown',quarterMessage:'НСПД не подтвердил квартал. Выбери квартал явно.'}),quarterCheckedAt:new Date(clock()).toISOString(),quarterSourceURL:r.url||null};if(r.status==='limited'){const sec=Number(r.retryAfter),date=Date.parse(r.retryAfter||'');value.retryAt=Math.max(clock()+30000,sec>0?clock()+sec*1000:Number.isFinite(date)?date:clock()+60000)}db.prepare('INSERT INTO nspd_quarter_assignments VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(key,JSON.stringify(value));return value;}finally{locks.delete(key)}
  }
- return {resolve};
+ function peek(geometry){const key=createHash('sha256').update(JSON.stringify(geometry)).digest('hex'),row=db.prepare('SELECT payload FROM nspd_quarter_assignments WHERE id=?').get(key);return row?JSON.parse(row.payload):null;}
+ return {resolve,peek};
 }
