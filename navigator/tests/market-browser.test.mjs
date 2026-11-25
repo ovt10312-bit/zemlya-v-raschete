@@ -22,10 +22,10 @@ function fakeBrowser({body='',html='<html></html>'}={}){
  let launches=0,navigations=0,closeCount=0;
  const pages=[];
  const launch=async()=>{launches++;return {on(){},async newPage(){let url='about:blank';const page={
-  setDefaultTimeout(){},async route(){},async goto(value){navigations++;url=value;return {status:()=>200,headers:()=>({})}},url:()=>url,
+  setDefaultTimeout(){},async route(pattern,callback){page.routeHandler=callback},async goto(value){navigations++;url=value;return {status:()=>200,headers:()=>({})}},url:()=>url,
   locator(selector){return {innerText:async()=>body,count:async()=>0,evaluateAll:async()=>[]}},async content(){return html},async close(){closeCount++}
  };pages.push(page);return page}}};
- return {launch,stats:()=>({launches,navigations,closeCount,pages:pages.length})};
+ return {launch,pages,stats:()=>({launches,navigations,closeCount,pages:pages.length})};
 }
 test('browser challenge stops the first Cian request without trying other pages',async()=>{
  const browser=fakeBrowser({body:'Подтвердите, что вы человек'});const market=createBrowserMarkets({launch:browser.launch});
@@ -68,4 +68,10 @@ test('the visible browser passes published facts to the strict price parser',asy
  const browser=fakeBrowser({html:'<script type="application/ld+json">'+JSON.stringify(payload)+'</script>'});
  const result=await createBrowserMarkets({launch:browser.launch}).avito({...input,searchURL:'https://www.avito.ru/kondrovo/zemelnye_uchastki'});
  assert.equal(result.status,'available',result.message);assert.equal(result.listings[0].price,900000);assert.equal(result.listings[0].areaM2,1000);assert.equal(result.listings[0].quarterCadastre,undefined);assert.equal(result.transport,'visible_browser');
+});
+test('closed-page route callbacks do not escape as unhandled rejections',async()=>{
+ const browser=fakeBrowser();await createBrowserMarkets({launch:browser.launch}).avito({...input,searchURL:'https://www.avito.ru/kondrovo/zemelnye_uchastki'});
+ const handler=browser.pages[0].routeHandler;
+ await assert.doesNotReject(handler({request:()=>({isNavigationRequest:()=>false}),continue:async()=>{throw Error('Target page has been closed')},abort:async()=>{throw Error('Target closed too')}}));
+ await assert.doesNotReject(handler({request:()=>{throw Error('Detached frame')},abort:async()=>{throw Error('Closed')}}));
 });

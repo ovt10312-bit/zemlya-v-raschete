@@ -86,9 +86,13 @@ export function createBrowserMarkets({root,launch,platform=process.platform}={})
    page=await ctx.newPage();pages.set(source,page);page.setDefaultTimeout(5000);
    // Main-page navigation remains within the chosen public source, including redirects.
    await page.route('**/*',async route=>{
-    if(route.request().isNavigationRequest()&&route.request().frame()===page.mainFrame()){
-     try{publicMarketURL(route.request().url(),source)}catch{await route.abort();return}
-    }await route.continue();
+    // Playwright event callbacks run outside run()'s try/catch. A closed page
+    // or detached frame must not become an unhandled rejection.
+    try{
+     if(route.request().isNavigationRequest()&&route.request().frame()===page.mainFrame()){
+      try{publicMarketURL(route.request().url(),source)}catch{await route.abort();return}
+     }await route.continue();
+    }catch{await route.abort().catch(()=>{})}
    });
    const fetchImpl=async(value,options={})=>{
     options.signal?.throwIfAborted();requests++;stage='read_public_page';

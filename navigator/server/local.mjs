@@ -1,7 +1,7 @@
 import {createContourOpener} from './contour-open.mjs';
 import {createRosreestrSelection} from './rosreestr-selection.mjs';
 import {createMarketService} from './market-service.mjs';
-import {createBrowserMarkets} from './market-browser.mjs';
+import {createMarketProcess} from './market-process.mjs';
 import {createRosreestrSource} from './rosreestr-source.mjs';
 import {createNspdService} from './nspd.mjs';
 import {createMailService,emailPage,verificationPage} from './mail.mjs';
@@ -9,7 +9,7 @@ import http from 'node:http';import {DatabaseSync} from 'node:sqlite';import {mk
 const root=path.resolve('.data');mkdirSync(root,{recursive:true});mkdirSync(path.join(root,'files'),{recursive:true});const db=new DatabaseSync(path.join(root,'workspace.sqlite'));db.exec(schema);db.exec('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, email TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);');
 const mail=createMailService({db,root});
 const nspd=createNspdService({db});
-const rosreestr=createRosreestrSource({db});const dealSelection=createRosreestrSelection({db,source:rosreestr,root});const browserMarkets=createBrowserMarkets({root});const market=createMarketService({db,...browserMarkets});
+const rosreestr=createRosreestrSource({db});const dealSelection=createRosreestrSelection({db,source:rosreestr,root});const browserMarkets=createMarketProcess({root});const market=createMarketService({db,...browserMarkets});
 const DB = {
   prepare(sql) {
     return {
@@ -44,7 +44,7 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
 
 
  if(url.pathname==='/api/market'){
-  try{if(req.method!=='GET'&&req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`)throw Error('Недопустимый источник запроса');const input=req.method==='POST'?JSON.parse(body.toString()||'{}'):{parcelId:url.searchParams.get('parcelId')};const state=JSON.parse(db.prepare('SELECT payload FROM workspaces WHERE owner=?').get('local-owner')?.payload||'{"parcels":[]}');const parcel=state.parcels.find(p=>p.id===input.parcelId&&!p.demo);if(!parcel)throw Error('Сохранённый участок не найден');if(!['GET','POST'].includes(req.method))throw Error('Метод не поддерживается');const result=req.method==='GET'?market.status(parcel.id):await market.search(parcel,{avito:input.avito,cian:input.cian});res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}return;
+  try{if(req.method!=='GET'&&req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`)throw Error('Недопустимый источник запроса');const input=req.method==='POST'?JSON.parse(body.toString()||'{}'):{parcelId:url.searchParams.get('parcelId')};const state=JSON.parse(db.prepare('SELECT payload FROM workspaces WHERE owner=?').get('local-owner')?.payload||'{"parcels":[]}');const parcel=state.parcels.find(p=>p.id===input.parcelId&&!p.demo);if(!parcel)throw Error('Сохранённый участок не найден');if(!['GET','POST'].includes(req.method))throw Error('Метод не поддерживается');const result=req.method==='GET'?market.status(parcel.id):market.start(parcel,{avito:input.avito,cian:input.cian});res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}return;
  }
  if(url.pathname.startsWith('/api/rosreestr/selection')){
   if(req.method!=='GET'&&(!req.headers.origin||(req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`))){res.writeHead(403);res.end(JSON.stringify({error:'Недопустимый источник запроса'}));return;}
