@@ -40,10 +40,12 @@ test('a rendered normal offer does not get rejected again for hidden CAPTCHA tex
  const page={...challengePage(),setDefaultTimeout(){},route:async()=>{},goto:async()=>({status:()=>200,headers:()=>({})}),url:()=>node.url,content:async()=>body};
  const market=createBrowserMarkets({launch:async()=>({on(){},newPage:async()=>page})});const r=await market.avito({settlement:'Кондрово',region:'Калужская область',usage:'ИЖС',searchURL:node.url});assert.equal(r.status,'available',r.message);assert.equal(r.listings.length,1);
 });
-test('collected asking prices remain visible without becoming quarter-confirmed calculator data',()=>{
+test('asking prices from the same settlement and usage are eligible regardless of quarter',()=>{
  const offers=Array.from({length:9},(_,i)=>({id:i,source:'ЦИАН',price:400000+i*10000,area:10,settlement:'Кондрово',usage:'ИЖС'}));
  const summary=marketOfferSummary([{source:'ЦИАН',listings:offers}],{origin:'formation',settlement:'Кондрово',usage:'ИЖС'});
- assert.equal(summary.collected.length,9);assert.equal(summary.eligible.length,0);assert.equal(summary.missingQuarter,9);assert.equal(summary.quarter,null);assert.equal(summary.differentQuarter,0);
+ assert.equal(summary.collected.length,9);assert.equal(summary.eligible.length,9);
  const matched=marketOfferSummary([{listings:[{...offers[0],quarterCadastre:'40:04:010101'},{...offers[1],quarterCadastre:'40:04:010201'},offers[2]]}],{origin:'formation',settlement:'Кондрово',usage:'ИЖС',quarterCadastre:'40:04:010101'});
- assert.equal(matched.eligible.length,1);assert.equal(matched.missingQuarter,1);assert.equal(matched.differentQuarter,1);
+ assert.equal(matched.eligible.length,3);
+ const other=marketOfferSummary([{listings:[{...offers[0],settlement:'Калуга'},{...offers[1],usage:'ЛПХ'},offers[2]]}],{origin:'formation',settlement:'Кондрово',usage:'ИЖС'});
+ assert.equal(other.eligible.length,1);assert.equal(other.eligible[0].id,2);
 });
