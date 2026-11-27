@@ -67,8 +67,8 @@ function retryTimestamp(value,now){const n=Number(value),date=Date.parse(value||
 export async function searchCian(input,{fetchImpl=nodeFetch,clock=()=>Date.now(),timeout=10000,totalTimeoutMs=75000,maxRequests=28}={}){
  const checkedAt=new Date(clock()).toISOString(),base={source:CIAN_SOURCE,checkedAt,listings:[],connected:false,requests:0,inspectedListings:0,limit:Math.min(MAX_OFFERS,Math.max(1,Number(input?.limit)||MAX_OFFERS)),diagnostics:[],rejected:{},structuredSamples:[],priceKind:'asking'};
  const usage=input?.usage?usageOf(input.usage):null;if(input?.usage&&!usage)return {...base,status:'invalid_request',message:'Неизвестный вид использования участка.'};
- const areaMinM2=Number(input?.areaMinM2??600),areaMaxM2=Number(input?.areaMaxM2??2000),settlement=plain(input?.settlement),region=plain(input?.region);
- if(!settlement||!Number.isFinite(areaMinM2)||!Number.isFinite(areaMaxM2)||areaMinM2<600||areaMaxM2>2000||areaMinM2>areaMaxM2)return {...base,status:'invalid_request',message:'Нужны населённый пункт и площадь в пределах 600–2000 м².'};
+ const areaMinM2=Number(input?.areaMinM2??0),areaMaxM2=Number(input?.areaMaxM2??Number.MAX_SAFE_INTEGER),settlement=plain(input?.settlement),region=plain(input?.region);
+ if(!settlement||!Number.isFinite(areaMinM2)||!Number.isFinite(areaMaxM2)||areaMinM2<0||areaMaxM2<=0||areaMinM2>areaMaxM2)return {...base,status:'invalid_request',message:'Нужны населённый пункт и корректные границы площади.'};
  const query={settlement,region,usage,areaMinM2,areaMaxM2,center:coordinates(input?.center)};
  let searchURL=input.searchURL||((norm(settlement)==='кондрово'&&norm(region)==='калужская область')?CIAN_KONDROVO_SEARCH:null);
  if(!searchURL)return {...base,status:'setup_required',message:'Для этого населённого пункта ещё не подтверждён адрес публичного поиска ЦИАН. Автоматическое построение поискового URL не настроено.'};

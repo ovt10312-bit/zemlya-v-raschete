@@ -30,7 +30,7 @@ function candidate(item,base,input,checkedAt){
  const price=amount(offer.price);if(price===null||String(offer.priceCurrency||'').toUpperCase()!=='RUB')return rejection('missing_ruble_price');
  const areaProp=props.find(p=>/площадь\s+(?:земельного\s+)?участка/i.test(p.name||''));
  const areaM2=areaValue(item.lotSize?.value,item.lotSize?.unitText||item.lotSize?.unitCode)||areaValue(areaProp?.value,areaProp?.unitText||areaProp?.unitCode)||areaText(areaProp?.value)||areaText(title);
- if(areaM2===null||areaM2<input.areaMinM2||areaM2>input.areaMaxM2)return rejection('area_not_comparable');
+ if(areaM2===null||areaM2<(input.areaMinM2??0)||areaM2>(input.areaMaxM2??Number.MAX_SAFE_INTEGER))return rejection('area_not_comparable');
  const usageEvidence=[title,...props.filter(p=>/назначени|разрешенн|тип участка/i.test(p.name||'')).map(p=>p.value)].join(' · '),usage=usageOf(usageEvidence);
  if(!usage||usage!==input.usage)return rejection('usage_not_verified_or_different');
  const address=item.address||item.location?.address,settlement=typeof address?.addressLocality==='string'?address.addressLocality.trim():'';
@@ -60,8 +60,8 @@ export function extractAvitoJSONLD(html,input,{checkedAt=new Date().toISOString(
 function challenge(html){const title=html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'';const visible=html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi,'').replace(/<[^>]*>/g,' ');return /(captcha|access denied|доступ\s+ограничен|доступ\s+запрещен|проверка\s+браузера|подтвердите.{0,40}(?:человек|робот)|слишком много запросов)/i.test(title+' '+visible);}
 function retryAt(value,now){const sec=Number(value),date=Date.parse(value||'');return new Date(Math.max(now+30000,sec>0?now+sec*1000:Number.isFinite(date)?date:now+60000)).toISOString();}
 function optionsOf(input={}){
- const settlement=String(input.settlement||'').trim(),usage=explicitUsage(input.usage),areaMinM2=Number(input.areaMinM2??600),areaMaxM2=Number(input.areaMaxM2??2000),limit=Number(input.limit??25);
- if(!settlement||settlement.length>200||!usage||!Number.isFinite(areaMinM2)||!Number.isFinite(areaMaxM2)||areaMinM2<600||areaMaxM2>2000||areaMinM2>areaMaxM2||!Number.isInteger(limit)||limit<1||limit>25)throw Error('Укажи населённый пункт, назначение, площадь 600–2000 м² и лимит до 25 объявлений.');
+ const settlement=String(input.settlement||'').trim(),usage=explicitUsage(input.usage),areaMinM2=Number(input.areaMinM2??0),areaMaxM2=Number(input.areaMaxM2??Number.MAX_SAFE_INTEGER),limit=Number(input.limit??25);
+ if(!settlement||settlement.length>200||!usage||!Number.isFinite(areaMinM2)||!Number.isFinite(areaMaxM2)||areaMinM2<0||areaMaxM2<=0||areaMinM2>areaMaxM2||!Number.isInteger(limit)||limit<1||limit>25)throw Error('Укажи населённый пункт, назначение, корректную площадь и лимит до 25 объявлений.');
  return {...input,settlement,region:String(input.region||'').trim(),usage,areaMinM2,areaMaxM2,limit};
 }
 async function readPage(url,{fetchImpl,clock,timeoutMs=10000,maxBytes=MAX_BYTES}){
@@ -72,7 +72,7 @@ async function readPage(url,{fetchImpl,clock,timeoutMs=10000,maxBytes=MAX_BYTES}
   if(!response.ok){await response.body?.cancel();return {...metadata,status:response.status===429?'limited':response.status===403?'denied':'unavailable',...(response.status===429?{retryAt:retryAt(response.headers.get('retry-after'),clock())}:{})};}
   const reader=response.body?.getReader();if(!reader)throw Error('Пустой ответ Авито.');const chunks=[];let bytes=0;
   try{while(true){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>Math.min(MAX_BYTES,maxBytes)){await reader.cancel();throw Error('Страница Авито превышает допустимый размер.');}chunks.push(value)}}finally{reader.releaseLock()}
-  return {...metadata,status:'page_received',html:new TextDecoder().decode(Buffer.concat(chunks)),bytes,visibilityChecked:response.marketAccessChecked===true};
+  return {...metadata,status:'page_received',html:new TextDecoder().decode(Buffer.concat(chunks)),bytes,visibilityChecked:response.marketAccessChecked===true,visibleCards:response.marketCards};
  }
  throw Error('Слишком много перенаправлений Авито.');
 }
@@ -86,11 +86,23 @@ export async function searchAvito(input,options={}){
   const page=await readPage(request.searchURL,{...options,fetchImpl:options.fetchImpl||nodeFetch,clock});const metadata={...result,requests:page.requests,httpStatus:page.httpStatus,searchURL:page.url};
   if(page.status!=='page_received')return {...metadata,status:page.status,...(page.retryAt?{retryAt:page.retryAt}:{}),message:`Авито вернул HTTP ${page.httpStatus}. Рыночные цены не получены.`};
   if(!page.visibilityChecked&&challenge(page.html))return {...metadata,status:'denied',reason:'access_check',message:'Авито показал проверку доступа. Сбор остановлен, цены не получены.'};
-  const extracted=extractAvitoJSONLD(page.html,request,{checkedAt,baseURL:page.url});
+  const extracted=Array.isArray(page.visibleCards)?extractAvitoCards(page.visibleCards,request,{checkedAt,baseURL:page.url}):extractAvitoJSONLD(page.html,request,{checkedAt,baseURL:page.url});
   return {...metadata,...extracted,status:extracted.listings.length?'available':'schema_unknown',connected:extracted.listings.length>0,message:extracted.listings.length?`Прочитано подтверждённых предложений Авито: ${extracted.listings.length}. Это цены объявлений; сведения соседних населённых пунктов сохранены отдельно.`:'В полученной странице не найдены подходящие предложения с подтверждёнными ценой, площадью, назначением и местом. Текущий формат Авито не подтверждён; это не означает отсутствие объявлений.'};
  }catch(e){return {...result,status:e.name==='TimeoutError'?'timeout':'unavailable',message:e.name==='TimeoutError'?'Авито не ответил вовремя. Рыночные цены не получены.':'Получение Авито недоступно: '+e.message}}
 }
 export async function probeAvito(options={}){
  const clock=options.clock||Date.now,checkedAt=new Date(clock()).toISOString(),base={source:'Авито',checkedAt,listings:[],connected:false,requests:0,searchURL:AVITO_HOME};
  try{const page=await readPage(AVITO_HOME,{...options,fetchImpl:options.fetchImpl||nodeFetch,clock});const metadata={...base,requests:page.requests,httpStatus:page.httpStatus};if(page.status!=='page_received')return {...metadata,status:page.status,...(page.retryAt?{retryAt:page.retryAt}:{}),message:`Авито вернул HTTP ${page.httpStatus}. Доступ к объявлениям не подтверждён.`};return {...metadata,status:challenge(page.html)?'denied':'schema_unknown',message:'Страница Авито ответила; получение сопоставимых объявлений ещё не подтверждено.'}}catch(e){return {...base,status:e.name==='TimeoutError'?'timeout':'unavailable',message:'Не удалось проверить Авито: '+e.message}}
+}
+
+// Visible search-result cards only. Card text is evidence; query text is not.
+export function extractAvitoCards(cards,input,{checkedAt=new Date().toISOString(),baseURL=AVITO_HOME}={}){
+ const nodes=cards.slice(0,input.limit||25).map(card=>({
+  '@type':'Product',name:card.title,url:card.url,
+  address:card.address,
+  additionalProperty:[{name:'Назначение',value:card.usageText}],
+  offers:{price:card.price,priceCurrency:card.currency}
+ }));
+ // Reuse strict price, land type, location and usage checks.
+ return extractAvitoJSONLD('<script type="application/ld+json">'+JSON.stringify(nodes)+'</script>',input,{checkedAt,baseURL});
 }

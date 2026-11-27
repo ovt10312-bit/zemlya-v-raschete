@@ -22,7 +22,7 @@ export function createMarketService({db,avito=searchAvito,cian=searchCian,clock=
   const old=check(parcel);active.add(parcel.id);
   const running=save({...old,parcelId:parcel.id,settlement:parcel.settlement,startedAt:new Date(clock()).toISOString(),jobStatus:'running',message:'Получаем цены в отдельном окне браузера.',sources:old?.sources||[]});
   try{
-   const input={settlement:parcel.settlement,region:parcel.region,usage:parcel.usage,areaMinM2:600,areaMaxM2:2000,limit:25,center:{lat:parcel.lat,lng:parcel.lng}};
+   const input={settlement:parcel.settlement,region:parcel.region,usage:parcel.usage,areaMinM2:0,areaMaxM2:Number.MAX_SAFE_INTEGER,limit:25,center:{lat:parcel.lat,lng:parcel.lng}};
    const providers=[{key:'avito',name:'Авито',run:avito},{key:'cian',name:'ЦИАН',run:cian}].filter(p=>!urls.source||urls.source==='all'||urls.source===p.key);
    const results=await Promise.allSettled(providers.map(p=>Promise.resolve().then(()=>p.run({...input,searchURL:urls[p.key]||undefined}))));
    const updated=results.map((r,i)=>r.status==='fulfilled'?describeMarketAccess(r.value):{source:providers[i].name,status:'unavailable',connected:false,listings:[],message:'Источник не ответил: '+r.reason?.message});

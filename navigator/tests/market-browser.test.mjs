@@ -18,12 +18,12 @@ test('a missing local browser is an explicit failure, not missing offers',async(
  const result=await market.avito(input);assert.equal(result.status,'automation_failed');assert.equal(result.stage,'browser_start');assert.equal(result.requests,0);assert.equal(result.connected,false);
 });
 
-function fakeBrowser({body='',html='<html></html>'}={}){
+function fakeBrowser({body='',html='<html></html>',cards=[]}={}){
  let launches=0,navigations=0,closeCount=0;
  const pages=[];
  const launch=async()=>{launches++;return {on(){},async newPage(){let url='about:blank';const page={
   setDefaultTimeout(){},async route(pattern,callback){page.routeHandler=callback},async goto(value){navigations++;url=value;return {status:()=>200,headers:()=>({})}},url:()=>url,
-  locator(selector){return {innerText:async()=>body,count:async()=>0,evaluateAll:async()=>[]}},async content(){return html},async close(){closeCount++}
+  locator(selector){return {innerText:async()=>body,count:async()=>0,evaluateAll:async()=>selector==='[data-marker="item"]'?cards:[]}},async evaluate(){},async waitForTimeout(){},async content(){return html},async close(){closeCount++}
  };pages.push(page);return page}}};
  return {launch,pages,stats:()=>({launches,navigations,closeCount,pages:pages.length})};
 }
@@ -65,9 +65,9 @@ test('automatic Avito flow selects the exact region and follows the actual categ
 });
 test('the visible browser passes published facts to the strict price parser',async()=>{
  const payload={'@type':'Product',name:'Участок 10 соток, ИЖС',url:'https://www.avito.ru/kondrovo/zemelnye_uchastki/uchastok_123456789',address:{addressLocality:'Кондрово',addressRegion:'Калужская область'},offers:{price:900000,priceCurrency:'RUB'}};
- const browser=fakeBrowser({html:'<script type="application/ld+json">'+JSON.stringify(payload)+'</script>'});
+ const browser=fakeBrowser({cards:[{title:payload.name,url:payload.url,location:'Кондрово, Калужская область',usageText:'ИЖС',price:900000,currency:'RUB'}]});
  const result=await createBrowserMarkets({launch:browser.launch}).avito({...input,searchURL:'https://www.avito.ru/kondrovo/zemelnye_uchastki'});
- assert.equal(result.status,'available',result.message);assert.equal(result.listings[0].price,900000);assert.equal(result.listings[0].areaM2,1000);assert.equal(result.listings[0].quarterCadastre,undefined);assert.equal(result.transport,'visible_browser');
+ assert.equal(result.status,'available',result.message);assert.equal(result.listings[0].price,900000);assert.equal(result.listings[0].areaM2,1000);assert.equal(result.listings[0].quarterCadastre,undefined);assert.equal(result.transport,'visible_browser');assert.equal(browser.stats().navigations,1);assert.equal(result.requests,1);
 });
 test('closed-page route callbacks do not escape as unhandled rejections',async()=>{
  const browser=fakeBrowser();await createBrowserMarkets({launch:browser.launch}).avito({...input,searchURL:'https://www.avito.ru/kondrovo/zemelnye_uchastki'});

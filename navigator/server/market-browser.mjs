@@ -174,6 +174,7 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
      const html=await page.content();if(Buffer.byteLength(html)>3000000)throw Error('Страница слишком большая для безопасного чтения.');
      const result=new Response(html,{status:response?.status()||200,headers:{'content-type':'text/html; charset=utf-8',...(response?.headers()['retry-after']?{'retry-after':response.headers()['retry-after']}: {})}});
      result.marketAccessChecked=true;
+     if(source==='Авито'&&new URL(target).pathname.includes('/zemelnye_uchastki')&&!/_[0-9]+\/?$/.test(new URL(target).pathname))result.marketCards=await readAvitoSearchCards(page,input,{selectedLocation:!input.searchURL});
      if(source==='ЦИАН')result.marketFacts=await readCianVisibleFacts(page,input.settlement);
      return result;
     }catch(error){
@@ -187,20 +188,37 @@ export function createBrowserMarkets({root,launch,platform=process.platform,cian
    let searchURL=input.searchURL;
    if(source==='Авито'&&!searchURL){stage='select_location_category';requests++;searchURL=await selectAvitoSearch(page,input,{accessWaitMs:avitoAccessWaitMs});}
    const result=await(source==='Авито'?searchAvito:searchCian)({...input,searchURL},{...(source==='ЦИАН'?cianOptions:{}),fetchImpl});
-   // Avito search cards may link to offers rather than contain complete facts.
-   // Read at most 25 actual public offer links; never paginate or invent links.
    if(accessFailure&&result.listings?.length)return {...result,status:'partial',stage:accessFailure.stage||'access_check',...(accessFailure.stage==='ip_restricted'?{reason:'ip_restricted'}:{}),transport:'visible_browser',requests};
    if(accessFailure)throw accessFailure;
-   if(source==='Авито'&&result.status==='schema_unknown'&&requests<=2){
-    const links=await page.locator('a[href]').evaluateAll(items=>items.map(a=>a.href));
-    const urls=[...new Set(links)].filter(url=>{try{return /\/zemelnye_uchastki\/[^/]+_\d+\/?$/.test(new URL(publicMarketURL(url,source)).pathname)}catch{return false}}).slice(0,25);
-    const deadline=Date.now()+45000;const listings=[];
-    for(const url of urls){if(Date.now()>deadline)break;const offer=await searchAvito({...input,searchURL:url},{fetchImpl});if(accessFailure)throw accessFailure;if(!['available','schema_unknown'].includes(offer.status))return {...offer,...base,requests,status:offer.status,message:offer.message};for(const item of offer.listings||[])if(!listings.some(a=>a.url===item.url))listings.push(item);}
-    if(listings.length)return {...result,transport:'visible_browser',requests,listings,connected:true,status:'available',message:`Прочитано подтверждённых предложений Авито: ${listings.length}. Это цены объявлений.`};
-   }
    return {...result,transport:'visible_browser',requests,...(source==='Авито'?{geolocation:base.geolocation}:{})};
   }catch(e){const uiDiagnostics=source==='Авито'&&page?await avitoFormDiagnostics(page):null;return {...base,requests,status:e.stage==='ip_restricted'?'denied':e.stage==='access_check'?'access_check':'automation_failed',stage:e.stage||stage,...(e.stage==='ip_restricted'?{reason:'ip_restricted'}:{}),...(e.accessEvidence?{accessEvidence:e.accessEvidence}:{}),...(uiDiagnostics?{uiDiagnostics}:{}),message:e.message||'Не удалось выполнить поиск в браузере.'};}
   finally{active.delete(source);/* Keep the visible page for reviewing the actual result. */}
  }
  return {avito:input=>run('Авито',input),cian:input=>run('ЦИАН',input)};
+}
+
+export async function readAvitoSearchCards(page,input,{selectedLocation=false,maxPasses=8}={}){
+ const cards=new Map(),limit=Math.min(25,input.limit||25),deadline=Date.now()+6000;
+ for(let pass=0;pass<maxPasses&&Date.now()<deadline&&cards.size<limit;pass++){
+  await assertAccess(page,{waitMs:0});
+  const batch=await page.locator('[data-marker="item"]').evaluateAll(items=>items.filter(el=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(el).visibility!=='hidden'}).slice(0,100).map(el=>{
+   const title=el.querySelector('[data-marker="item-title"]'),price=el.querySelector('[data-marker="item-price"]'),location=el.querySelector('[data-marker="item-address"], [data-marker="item-location"]');
+   const priceText=price?.innerText||'',currency=price?.querySelector('[itemprop="priceCurrency"]')?.getAttribute('content')||(/₽|руб/i.test(priceText)?'RUB':'');
+   const amount=price?.querySelector('[itemprop="price"]')?.getAttribute('content')||priceText.replace(/\s*(?:₽|руб\.?)\s*$/i,'');
+   return {title:title?.innerText||'',url:title?.href||title?.closest('a')?.href||'',price:amount,currency,location:location?.innerText||'',usageText:el.innerText.slice(0,4000)};
+  }));
+  const before=cards.size;
+  for(const card of batch){
+   if(cards.size>=limit)break;if(!card.url||cards.has(card.url))continue;
+   // A place in the card itself is required. Selected location only supplies
+   // region evidence when this run actually selected the exact city and region.
+   const same=locationMatches(card.location,input.settlement,input.region)||selectedLocation&&locationMatches(card.location,input.settlement,input.settlement);
+   const address=same&&!/\d+\s*км/iu.test(card.location)?{addressLocality:input.settlement,addressRegion:input.region}:{};
+   cards.set(card.url,{...card,address});
+  }
+  if(cards.size===before||cards.size>=limit)break;
+  await page.evaluate(()=>window.scrollBy(0,Math.max(500,window.innerHeight-100)));
+  await page.waitForTimeout(350);
+ }
+ return [...cards.values()];
 }
