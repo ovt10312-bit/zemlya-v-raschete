@@ -34,7 +34,7 @@ End If
 On Error GoTo 0
 CreateShortcuts installedScript
 If Ready() Then
-  sh.Run "http://127.0.0.1:8787", 1, False
+  OpenNavigatorBrowser
   WScript.Quit 0
 End If
 sh.CurrentDirectory = appDir
@@ -47,13 +47,37 @@ If started Then
   For i = 1 To 30
     WScript.Sleep 500
     If Ready() Then
-      sh.Run "http://127.0.0.1:8787", 1, False
+      OpenNavigatorBrowser
       WScript.Quit 0
     End If
   Next
 End If
 MsgBox "Сервер не ответил. Запусти Start-Navigator.cmd из папки navigator и пришли сообщение об ошибке. Данные не удалены.", 48, "Земля Навигатор"
 WScript.Quit 1
+
+Sub OpenNavigatorBrowser()
+  Dim candidate, candidates, key, registered
+  candidates = Array(sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\Perplexity\Comet\Application\comet.exe"), sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\Comet\Application\comet.exe"), sh.ExpandEnvironmentStrings("%PROGRAMFILES%\Perplexity\Comet\Application\comet.exe"), sh.ExpandEnvironmentStrings("%PROGRAMFILES(X86)%\Perplexity\Comet\Application\comet.exe"))
+  For Each candidate In candidates
+    If fs.FileExists(candidate) Then
+      sh.Run Q(candidate) & " http://127.0.0.1:8787", 1, False
+      Exit Sub
+    End If
+  Next
+  For Each key In Array("HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\comet.exe\", "HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\comet.exe\")
+    registered = ""
+    On Error Resume Next
+    registered = sh.RegRead(key)
+    Err.Clear
+    On Error GoTo 0
+    registered = Replace(registered, Chr(34), "")
+    If fs.FileExists(registered) Then
+      sh.Run Q(registered) & " http://127.0.0.1:8787", 1, False
+      Exit Sub
+    End If
+  Next
+  sh.Run "http://127.0.0.1:8787", 1, False
+End Sub
 
 Function Q(value)
   Q = Chr(34) & value & Chr(34)

@@ -1,4 +1,4 @@
-import {searchAvito} from './market-avito.mjs';
+import {searchAvito,extractAvitoCards} from './market-avito.mjs';
 import {searchCian} from './market-cian.mjs';
 import {describeMarketAccess} from '../src/market-access.mjs';
 export function createMarketService({db,avito=searchAvito,cian=searchCian,clock=Date.now}){
@@ -36,5 +36,30 @@ export function createMarketService({db,avito=searchAvito,cian=searchCian,clock=
   // operation runs in the background; GET only reads its persisted state.
   if(urls.source&&!['all','avito','cian'].includes(urls.source))throw Error('Неизвестный источник объявлений.');check(parcel);search(parcel,urls).catch(()=>{});return status(parcel.id);
  }
- return {status,search,start};
+ function importBrowser(parcel,payload){
+  // Submitting already read cards performs no network request. A fresh Cian
+  // result must not prevent this submission through the network cooldown.
+  if(!parcel?.id||!parcel.settlement)throw Error('Выбери сохранённый участок.');
+  if(active.has(parcel.id))throw Error('Дождись завершения текущего поиска.');
+  const old=status(parcel.id);
+  if(!payload||!Array.isArray(payload.cards)||payload.cards.length>25||JSON.stringify(payload).length>150000)throw Error('Некорректный ответ расширения.');
+  const checkedAt=new Date(clock()).toISOString();let listings=[],rejected={};
+  if(payload.status==='completed'){
+   const u=new URL(payload.searchURL);if(u.protocol!=='https:'||!['avito.ru','www.avito.ru'].includes(u.hostname)||u.port||u.username||u.password||!u.pathname.includes('/zemelnye_uchastki'))throw Error('Расширение не подтвердило публичную выдачу Авито.');
+   const words=(text,value)=>{const norm=s=>String(s||'').toLowerCase().replace(/ё/g,'е').split(/[^\p{L}\p{N}]+/u).filter(Boolean);const a=norm(text),b=norm(value);return b.length>0&&a.some((_,i)=>b.every((v,j)=>a[i+j]===v));};
+   const cards=payload.cards.map(card=>{
+    const location=typeof card.location==='string'?card.location:'';
+    const local=words(location,parcel.settlement)&&! /\d+\s*км/iu.test(location);
+    const regional=words(location,parcel.region)||payload.locationSelected===true;
+    return {title:String(card.title||'').slice(0,500),url:String(card.url||'').slice(0,2000),price:card.price,currency:card.currency,usageText:String(card.usageText||'').slice(0,4000),address:local&&regional?{addressLocality:parcel.settlement,addressRegion:parcel.region}:{}};
+   });
+   ({listings,rejected}=extractAvitoCards(cards,{settlement:parcel.settlement,region:parcel.region,usage:parcel.usage,limit:25},{checkedAt,baseURL:u.href}));
+   listings=listings.map(row=>({...row,collectionMethod:'browser_extension'}));
+  }
+  const statuses=new Set(['denied','access_check','timeout','schema_unknown','automation_failed','invalid_request','busy']);
+  const source={source:'Авито',checkedAt,listings,rejected,connected:listings.length>0,transport:'browser_extension',status:listings.length?'available':statuses.has(payload.status)?payload.status:'schema_unknown',message:listings.length?`Получены цены Авито: ${listings.length}. Это цены объявлений.`:String(payload.message||'Не найдены карточки с подтверждёнными ценой, площадью, назначением и местом.').slice(0,500)};
+  const sources=[source,...(old?.sources||[]).filter(s=>s.source!=='Авито').map(s=>({...s,notRequested:true}))];
+  return save({parcelId:parcel.id,settlement:parcel.settlement,checkedAt,jobStatus:'completed',requestedSources:['Авито'],sources});
+ }
+ return {status,search,start,importBrowser};
 }

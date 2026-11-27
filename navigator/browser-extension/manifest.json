@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Земля · цены из браузера",
+  "version": "1.0.0",
+  "description": "По кнопке Навигатора читает до 25 карточек земельных участков на Авито без открытия объявлений.",
+  "permissions": ["scripting"],
+  "host_permissions": ["https://www.avito.ru/*", "https://avito.ru/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "content_scripts": [{"matches": ["http://127.0.0.1:8787/*", "http://localhost:8787/*"], "js": ["bridge.js"], "run_at": "document_start"}]
+}
