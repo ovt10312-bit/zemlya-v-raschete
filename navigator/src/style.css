@@ -23,3 +23,5 @@
 .rosreestr-source{padding:20px;margin-top:22px}.rosreestr-source>h3{display:flex;align-items:center;gap:8px;font-weight:600}.rosreestr-source>p{line-height:1.6}.rosreestr-source .settings-actions{padding:12px 0 0}
 
 .comet-market .comet-context{display:flex;align-items:flex-start;gap:9px;margin:14px 0;line-height:1.6}.comet-market .comet-context input{width:auto;margin-top:5px;flex-shrink:0}.comet-market textarea{line-height:1.6}.comet-market>.btn{margin-bottom:12px}
+
+.browser-setup{margin:18px 0;padding:16px;border:1px solid var(--line);border-radius:10px;background:#f6f8f5}.browser-setup h4{margin:0 0 10px}.browser-setup p,.browser-setup li{line-height:1.7}.browser-setup ol{padding-left:22px}.browser-setup li{margin-bottom:10px}.browser-setup code{overflow-wrap:anywhere;white-space:normal}

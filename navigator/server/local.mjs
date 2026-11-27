@@ -1,3 +1,4 @@
+import {openBrowserSetup} from './browser-setup.mjs';
 import {nodeFetch} from './node-fetch.mjs';
 import {createContourOpener} from './contour-open.mjs';
 import {createRosreestrSelection} from './rosreestr-selection.mjs';
@@ -44,6 +45,10 @@ const attempts=new Map();const port=Number(process.env.PORT||8787);http.createSe
  if(!session){if(url.pathname.startsWith('/api/')){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Войди в локальный кабинет'}));}else{res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(authPage(!account));}return;}
 
 
+ if(url.pathname==='/api/market/browser-setup'){
+  if(req.method!=='POST'||![origin,`http://localhost:${port}`].includes(req.headers.origin)){res.writeHead(403,{'content-type':'application/json'});res.end(JSON.stringify({error:'Недопустимый запрос подготовки браузера'}));return;}
+  try{const result=await openBrowserSetup();res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:e.message}));}return;
+ }
  if(url.pathname==='/api/market'){
   try{if(req.method!=='GET'&&req.headers.origin!==origin&&req.headers.origin!==`http://localhost:${port}`)throw Error('Недопустимый источник запроса');const input=req.method==='POST'?JSON.parse(body.toString()||'{}'):{parcelId:url.searchParams.get('parcelId')};const state=JSON.parse(db.prepare('SELECT payload FROM workspaces WHERE owner=?').get('local-owner')?.payload||'{"parcels":[]}');const parcel=state.parcels.find(p=>p.id===input.parcelId&&!p.demo);if(!parcel)throw Error('Сохранённый участок не найден');if(!['GET','POST'].includes(req.method))throw Error('Метод не поддерживается');const result=req.method==='GET'?market.status(parcel.id):input.action==='browserResult'?market.importBrowser(parcel,input.result):market.start(parcel,{avito:input.avito,cian:input.cian,source:input.source});res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(result));}catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}return;
  }
